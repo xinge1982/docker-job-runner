@@ -1,0 +1,21 @@
+# Wails bin directory
+build/bin
+
+# IDEs
+.idea
+.vscode
+
+# The black hole that is...
+node_modules
+tmp
+build
+cache
+buildwin
+
+frontend/dist
+*.log
+data
+*.glb
+*.gltf
+tileset.json
+*.filepart

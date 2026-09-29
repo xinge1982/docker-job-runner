@@ -1,0 +1,18 @@
+Port 22
+Protocol 2
+HostKey /etc/jobrunner/hostkeys/ssh_host_ed25519_key
+AuthorizedKeysFile .ssh/authorized_keys
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PermitRootLogin no
+AllowUsers jobrunner
+UsePAM no
+X11Forwarding no
+AllowTcpForwarding no
+AllowAgentForwarding no
+PermitTunnel no
+PermitTTY no
+PrintMotd no
+Subsystem sftp internal-sftp

@@ -1,0 +1,18 @@
+{
+  "work_root": "/jobrunner/jobs",
+  "host_work_root": "/srv/jobrunner/jobs",
+  "tasks": {
+    "line_models": {
+      "image": "local/job-worker:demo",
+      "memory": "1g",
+      "cpus": "1.0",
+      "network": "none"
+    },
+    "missing_poles": {
+      "image": "local/job-worker:demo",
+      "memory": "1g",
+      "cpus": "1.0",
+      "network": "none"
+    }
+  }
+}

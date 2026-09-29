@@ -1,0 +1,22 @@
+FROM alpine:3.14
+
+ARG APK_MIRROR=https://mirrors.aliyun.com/alpine
+RUN printf '%s\n' \
+      "${APK_MIRROR}/v3.14/main" \
+      "${APK_MIRROR}/v3.14/community" \
+      > /etc/apk/repositories \
+    && apk add --no-cache docker-cli=20.10.11-r1 openssh ca-certificates \
+    && adduser -D -u 10001 -h /home/jobrunner -s /bin/sh jobrunner \
+    && passwd -d jobrunner \
+    && mkdir -p /home/jobrunner/.ssh /etc/jobrunner/hostkeys /run/sshd \
+    && chown -R jobrunner:jobrunner /home/jobrunner \
+    && chmod 700 /home/jobrunner/.ssh
+
+COPY jobrunner /usr/local/bin/jobrunner
+COPY ssh-entrypoint.sh /usr/local/bin/ssh-entrypoint.sh
+COPY sshd_config /etc/ssh/sshd_config
+RUN chmod 755 /usr/local/bin/jobrunner /usr/local/bin/ssh-entrypoint.sh
+
+ENV DOCKER_HOST=unix:///var/run/docker.sock
+EXPOSE 22
+ENTRYPOINT ["/usr/local/bin/ssh-entrypoint.sh"]

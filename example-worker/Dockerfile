@@ -1,0 +1,6 @@
+FROM python:3.11-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY worker.py /app/worker.py
+USER 65534:65534
+ENTRYPOINT ["python", "/app/worker.py"]

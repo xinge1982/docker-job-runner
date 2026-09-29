@@ -1,0 +1,18 @@
+services:
+  jobrunner:
+    build:
+      context: .
+      dockerfile: Dockerfile.ssh
+    image: local/jobrunner-ssh:alpine3.14
+    restart: unless-stopped
+    ports:
+      - "${JOBRUNNER_BIND_IP:?Set a reachable server IP}:2222:22"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/jobrunner/jobs:/jobrunner/jobs
+      - /srv/jobrunner/config.json:/etc/jobrunner/config.json:ro
+      - /srv/jobrunner/ssh/authorized_keys:/home/jobrunner/.ssh/authorized_keys:ro
+      - /srv/jobrunner/ssh/hostkeys:/etc/jobrunner/hostkeys
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+    # Add worker networks in config.json as needed; these are child containers.

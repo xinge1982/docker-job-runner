@@ -1,0 +1,13 @@
+services:
+  main:
+    image: your-main-app-with-docker-cli:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/jobrunner/jobs:/jobrunner/jobs
+      - ./config.in-container.example.json:/app/jobrunner-config.json:ro
+    # For a non-root UID, set DOCKER_SOCKET_GID using:
+    # stat -c '%g' /var/run/docker.sock
+    # group_add:
+    #   - "${DOCKER_SOCKET_GID}"
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock

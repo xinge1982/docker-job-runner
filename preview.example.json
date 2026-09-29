@@ -1,0 +1,7 @@
+{
+  "source_version": "road-data-20260929",
+  "candidates": [
+    {"id": "point-001", "longitude": 121.5, "latitude": 31.2},
+    {"id": "point-002", "longitude": 121.5001, "latitude": 31.2001}
+  ]
+}
