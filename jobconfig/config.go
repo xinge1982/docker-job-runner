@@ -21,12 +21,12 @@ type Config struct {
 }
 
 type TaskType struct {
-	Image                string            `json:"image"`
-	Memory               string            `json:"memory"`
-	CPUs                 string            `json:"cpus"`
-	Network              string            `json:"network"`
-	Mode                 string            `json:"mode,omitempty"`
-	Command              []string          `json:"command,omitempty"`
+	Image   string   `json:"image"`
+	Memory  string   `json:"memory"`
+	CPUs    string   `json:"cpus"`
+	Network string   `json:"network"`
+	Mode    string   `json:"mode,omitempty"`
+	Command []string `json:"command,omitempty"`
 	// SchemaArgument enables machine-readable discovery from the fixed command.
 	SchemaArgument       string            `json:"schema_argument,omitempty"`
 	WorkDir              string            `json:"work_dir,omitempty"`
