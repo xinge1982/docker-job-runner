@@ -1,6 +1,6 @@
 # Docker task runner (Linux host prototype)
 
-This is a host-side Go CLI for examining the two-container `preview` / `apply`
+This is a Go CLI for direct tasks and the two-container `preview` / `apply`
 workflow. It invokes the Docker CLI using an argument array (never a shell),
 and requires Docker CLI access to the local daemon. It uses only Go's standard
 library. The included Python image **does not write to the business database**:
@@ -11,7 +11,7 @@ library. The included Python image **does not write to the business database**:
 ```bash
 cd docker-job-runner
 docker build -t local/job-worker:demo ./example-worker
-cp config.example.json config.json
+cp config.demo.example.json config.json
 # Work directories default to ./jobs; the runner resolves this to a host path.
 go build -o jobrunner .
 ./jobrunner start  --config config.json --id example001 --type line_models --stage preview --input preview.example.json
@@ -45,13 +45,84 @@ The container runs with the UID and GID of the host user invoking `jobrunner`
 so it can write its output directory. Run this example as a dedicated non-root
 user with Docker access.
 
-The image must provide an `ENTRYPOINT` accepting `--stage`, `--input` and
-`--output`, and write `/job/output/result.json`. Existing Python scripts or Go
-executables can be wrapped by a small adapter like `worker.py`. Set the fixed
-image, memory, CPU, and network in `config.json`; callers cannot choose arbitrary
-images or shell commands. Use a specific network instead of `none` when a worker
-must reach PostgreSQL or MinIO. For a host-side runner, `work_root` resolves to
-a host path and `host_work_root` can be omitted.
+For staged tasks without a configured `command`, the image must provide an
+`ENTRYPOINT` accepting `--stage`, `--input` and `--output`, and write
+`/job/output/result.json`. Existing scripts can use a small adapter like
+`worker.py`. The `config.demo.example.json` file preserves this workflow.
+The fixed image, memory, CPU, network, mounts, and command come from the task
+configuration. For a host-side runner, `work_root` resolves to a host path and
+`host_work_root` can be omitted.
+
+## Run existing binaries or Python scripts in standard images
+
+`config.example.json` runs on the host. `config.in-container.example.json`
+runs in the SSH jobrunner container. Both configure `tileset_build` and
+`feature_road_id` with `alpine:3.14`, and a replaceable `missing_poles`
+example with `python:3.11-alpine`. These tasks use `mode: "direct"` and
+`--stage run`: they execute once without the preview/apply gate. The Python
+script path and flags are placeholders; adapt them to your existing program.
+For a real preview/apply task, use `mode: "staged"` and implement the result
+contract before enabling the apply step.
+
+Place executable binaries under `/srv/jobrunner/programs` on the Docker host
+and make them executable there. Alpine requires binaries compatible with musl
+or statically linked binaries. Put network data under
+`/srv/jobrunner/networks`. Edit the host-side paths in `mounts[*].source` for
+your installation. Each `target` and `work_dir` is a path *inside the task
+container*. `/job/input.json` holds the submitted JSON and `/job/output` is
+the stage's writable output directory. Configure a job result writer to create
+`/job/output/result.json` if you want to use the `result` command; `status`,
+`wait`, and `logs` work without that file. The two Go examples write their
+business files in the configured `networks` mount.
+
+Create a private environment file visible to the runner. Use
+`/srv/jobrunner/worker.env` for the host CLI, or mount that file into the SSH
+runner at `/etc/jobrunner/worker.env` as shown in
+`compose.ssh.example.yaml`. Add your actual database and storage variables
+there, one `NAME=value` entry per line; do not commit this file. Keep
+`config.json` private when it contains deployment-specific paths. The Docker
+CLI reads `env_file` from the runner filesystem. Docker Engine resolves
+`mounts[*].source` on the *host*, including when the CLI runs inside the SSH
+runner container. The jobrunner container does not need the programs or network
+data mounted into itself.
+
+Submit the program's command flags with `--params` as a JSON object. Each
+accepted name, target flag, required value, and optional regular expression
+is declared under `parameters` in the task configuration. The runner appends
+each `-flag=value` as a separate process argument, without a shell. Unknown
+names, missing required parameters, and values that fail their pattern are
+rejected. The separate `--input` JSON file remains available to the program
+at `/job/input.json`.
+
+```bash
+cp config.example.json config.json
+printf 'POSTGRES_HOST=postgres\nPOSTGRES_PORT=5432\nPOSTGRES_USER=postgres\n' > /srv/jobrunner/worker.env
+chmod 0600 /srv/jobrunner/worker.env
+printf '{}\n' > run.example.json
+./jobrunner start --config config.json --id bridges001 --type tileset_build --stage run \
+  --input run.example.json \
+  --params '{"config":"networks/config_jiangsu_1031.yaml","output_path":"networks/network_jiangsu_1031/tilesets/bridges","tileset_type":"bridges"}'
+./jobrunner status --config config.json --id bridges001 --stage run
+./jobrunner logs --config config.json --id bridges001 --stage run
+./jobrunner wait --config config.json --id bridges001 --stage run
+```
+
+Add the remaining required database and storage settings to the environment
+file locally. Make sure the Docker network `sign_default` exists. The runner
+does not create it. Run jobrunner under an account that can read the environment
+file and use Docker. A direct task can also be submitted through the Go client:
+
+```go
+containerID, err := runner.StartRunWithParams(ctx, id, "feature_road_id",
+    json.RawMessage(`{}`), map[string]string{
+        "config": "networks/config_jiangsu_2026.yaml",
+        "road_area_table": "hdroad_area0924",
+        "feature_table": "hdtraffic_ene",
+    })
+_ = containerID
+if err != nil { return err }
+status, err := runner.GetStatus(ctx, id, "run")
+```
 
 ## Run this CLI inside the main service container
 
@@ -191,7 +262,12 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o jobrunner .
 install -d -m 0700 /srv/jobrunner/ssh/hostkeys
 install -d -m 0700 /srv/jobrunner/ssh
 install -d -o 10001 -g 10001 -m 0700 /srv/jobrunner/jobs
+install -d -m 0755 /srv/jobrunner/programs /srv/jobrunner/networks
 cp config.in-container.example.json /srv/jobrunner/config.json
+# Add the required variables locally and let the jobrunner user read this file.
+touch /srv/jobrunner/worker.env
+chown 10001:10001 /srv/jobrunner/worker.env
+chmod 0600 /srv/jobrunner/worker.env
 # Put only trusted clients' SSH public keys into this file.
 touch /srv/jobrunner/ssh/authorized_keys
 chmod 0644 /srv/jobrunner/ssh/authorized_keys
@@ -224,33 +300,38 @@ and port 22; it needs an SSH client, its own private key, and a trusted
 
 `work_root` is `/jobrunner/jobs` inside the runner container, while
 `host_work_root` is `/srv/jobrunner/jobs` for the Docker daemon's bind mounts.
+`mounts[*].source` in the task configuration also refers to paths on the
+Docker host. `env_file` instead refers to `/etc/jobrunner/worker.env` inside
+the runner container; Compose mounts the host environment file there.
 The SSH login user has UID 10001; the entrypoint adds it to the socket's
 numeric group before starting sshd. Access to the Docker socket grants broad
 control over the host, so this container and its SSH keys should be treated as
 privileged infrastructure.
 
-## 从 Windows 安装 SSH 公钥并登录 jobrunner 容器
+## Add a Windows SSH key and connect to the jobrunner container
 
-以下步骤对应上面的 `compose.ssh.example.yaml`：宿主机的
-`/srv/jobrunner/ssh/authorized_keys` 挂载到容器中的
-`/home/jobrunner/.ssh/authorized_keys`，容器 SSH 的 22 端口映射为宿主机的
-2222 端口。先通过已有的**宿主机 SSH 通道**安装公钥，再登录 jobrunner 容器。
+The `compose.ssh.example.yaml` file mounts the host's
+`/srv/jobrunner/ssh/authorized_keys` at
+`/home/jobrunner/.ssh/authorized_keys` inside the container. Container port 22
+is published as port 2222 on the host. Add your public key through your
+existing **SSH connection to the Linux host** before connecting to the
+jobrunner container.
 
-### 1. 在 Windows PowerShell 生成专用密钥
+### 1. Generate a dedicated key in Windows PowerShell
 
 ```powershell
 ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\jobrunner_ed25519" -C "jobrunner-windows"
 ```
 
-生成的 `jobrunner_ed25519` 是私钥，只保留在 Windows；上传的仅是
-`jobrunner_ed25519.pub`。如果这个文件已存在，先确认是否要继续使用原密钥，
-不要覆盖已有私钥。
+`jobrunner_ed25519` is the private key; keep it on Windows. Upload only
+`jobrunner_ed25519.pub`. If the key file already exists, decide whether to
+reuse it before running this command. Do not overwrite an existing private key.
 
-### 2. 把公钥追加到 Linux 宿主机上的 authorized_keys
+### 2. Append the public key to authorized_keys on the Linux host
 
-将 `HOST_SSH_PORT`、`HOST_ADDRESS` 和 `root` 换成你实际用于登录
-Linux **宿主机**的端口、地址和账户。下面的账户需要能写入
-`/srv/jobrunner/ssh`。
+Replace `HOST_SSH_PORT`, `HOST_ADDRESS`, and `root` with the port, address, and
+account you already use to access the **Linux host**. That account must be
+able to write to `/srv/jobrunner/ssh`.
 
 ```powershell
 $pub = "$env:USERPROFILE\.ssh\jobrunner_ed25519.pub"
@@ -260,27 +341,32 @@ Get-Content $pub |
     "install -d -m 0700 /srv/jobrunner/ssh; touch /srv/jobrunner/ssh/authorized_keys; cat >> /srv/jobrunner/ssh/authorized_keys; chmod 0644 /srv/jobrunner/ssh/authorized_keys"
 ```
 
-可以在宿主机查看文件，确认新增的是一整行以 `ssh-ed25519` 开头的公钥。
-不要把私钥复制到 `authorized_keys` 或镜像中。重复执行追加命令会产生重复行。
+Check the file on the host: the new public key should occupy one line starting
+with `ssh-ed25519`. Never copy the private key into `authorized_keys` or the
+image. Running the append command twice creates a duplicate line.
 
-如果容器此前因 `authorized_keys` 为空而退出，在项目目录启动或重建容器：
+If the container previously exited because `authorized_keys` was empty, start
+or recreate it from the repository directory:
 
 ```bash
 JOBRUNNER_BIND_IP=YOUR_SERVER_IP docker compose -f compose.ssh.example.yaml up -d --build
 ```
 
-确保服务器防火墙仅向可信开发机和生产服务开放映射的 2222 端口。
+Allow access to the published port 2222 only from trusted development and
+production clients in the server firewall.
 
-### 3. 核对容器 SSH 主机密钥并登录
+### 3. Verify the container's SSH host key and connect
 
-容器启动后，通过已有的宿主机 SSH 通道读取持久化主机密钥的指纹：
+After the container starts, obtain its persistent host key fingerprint through
+your existing SSH connection to the Linux host:
 
 ```bash
 ssh-keygen -lf /srv/jobrunner/ssh/hostkeys/ssh_host_ed25519_key.pub
 ```
 
-从 Windows 首次连接时，核对 SSH 提示中的 ED25519 指纹与上面一致，
-再接受它并写入 Windows 的 `known_hosts`：
+On the first Windows connection, compare the ED25519 fingerprint in the SSH
+prompt with that value. Accept it only if they match; SSH then records it in
+the Windows `known_hosts` file.
 
 ```powershell
 ssh -i "$env:USERPROFILE\.ssh\jobrunner_ed25519" `
@@ -288,8 +374,9 @@ ssh -i "$env:USERPROFILE\.ssh\jobrunner_ed25519" `
     "id; docker version"
 ```
 
-`id` 应显示 jobrunner 用户及 Docker socket 对应的组；
-`docker version` 应显示 Linux 宿主机上的 Docker Server。可进一步查询任务：
+`id` should show the `jobrunner` user and the group that can access the Docker
+socket. `docker version` should show the Docker Server on the Linux host.
+You can also query a task:
 
 ```powershell
 ssh -i "$env:USERPROFILE\.ssh\jobrunner_ed25519" `
@@ -297,12 +384,12 @@ ssh -i "$env:USERPROFILE\.ssh\jobrunner_ed25519" `
     "/usr/local/bin/jobrunner status --config /etc/jobrunner/config.json --id example001 --stage preview"
 ```
 
-若 `example001` 尚未创建，最后一条命令返回“找不到容器”是正常的。
+If `example001` does not exist yet, a container-not-found response is expected.
 
-### 4. 在 Windows 调试 Go 主程序
+### 4. Debug the Go main program from Windows
 
-当前 `jobrunnerclient` 调用系统 `ssh`，未单独提供私钥路径字段。
-在 `$env:USERPROFILE\.ssh\config` 添加：
+`jobrunnerclient` invokes the system `ssh` command and does not have its own
+private-key-path field. Add this entry to `$env:USERPROFILE\.ssh\config`:
 
 ```sshconfig
 Host jobrunner-dev
@@ -312,13 +399,13 @@ Host jobrunner-dev
     IdentitiesOnly yes
 ```
 
-先在 PowerShell 验证：
+Verify the alias in PowerShell:
 
 ```powershell
 ssh -p 2222 jobrunner-dev "docker ps"
 ```
 
-然后在 Go 主程序中使用同一个 SSH 别名：
+Use that alias in the Go main program:
 
 ```go
 runner := jobrunnerclient.Client{
@@ -329,7 +416,9 @@ runner := jobrunnerclient.Client{
 }
 ```
 
-客户端启用了 `BatchMode=yes` 和严格主机密钥检查，运行时不会等待输入
-SSH 密码或首次连接确认。若私钥设置了口令，调试前用 `ssh-add` 加入 SSH agent。
-生产主程序使用自己的密钥和 `known_hosts`，通过环境配置选择目标地址与端口；
-Go 的任务调用流程保持一致。
+The client enables `BatchMode=yes` and strict host key checking. It cannot
+prompt for an SSH password or first-connection confirmation during a request.
+If the private key has a passphrase, add it to your SSH agent with `ssh-add`
+before debugging. Give the production main program its own key and
+`known_hosts` entry. Configure the destination and port per environment;
+the Go job workflow stays the same.
