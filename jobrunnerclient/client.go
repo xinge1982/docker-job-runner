@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -201,6 +202,62 @@ func (c Client) Stop(ctx context.Context, id, stage string) error {
 	return err
 }
 
+// UploadFile streams a known-size file to the job's immutable files directory.
+// Use the returned Path in the job's input or configured command parameters.
+// A caller can provide a SHA-256 digest to verify the transfer end to end.
+func (c Client) UploadFile(ctx context.Context, id, name string, size int64, sha256Hex string, source io.Reader) (UploadResult, error) {
+	if !validID.MatchString(id) || source == nil {
+		return UploadResult{}, errors.New("invalid job ID or upload source")
+	}
+	if size < 0 || size > 8<<30 {
+		return UploadResult{}, errors.New("upload size is outside the allowed range")
+	}
+	cmd, err := c.newCommand(ctx, "upload", "--id", id, "--file-name", name,
+		"--size", strconv.FormatInt(size, 10), "--sha256", sha256Hex)
+	if err != nil {
+		return UploadResult{}, err
+	}
+	cmd.Stdin = source
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return UploadResult{}, fmt.Errorf("jobrunner upload: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	var result UploadResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		return result, fmt.Errorf("decode upload response: %w", err)
+	}
+	if result.Name != name || result.Size != size || result.Path != "/job/files/"+name {
+		return result, errors.New("upload response does not match request")
+	}
+	return result, nil
+}
+
+type UploadResult struct {
+	Name   string `json:"name"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+	Path   string `json:"path"`
+}
+
+// DownloadArchive streams a tar.gz snapshot of the job directory into dst.
+// If it fails, dst may already contain a partial archive; discard that output.
+func (c Client) DownloadArchive(ctx context.Context, id string, dst io.Writer) error {
+	if !validID.MatchString(id) || dst == nil {
+		return errors.New("invalid job ID or archive destination")
+	}
+	cmd, err := c.newCommand(ctx, "archive", "--id", id)
+	if err != nil {
+		return err
+	}
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = dst, &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("jobrunner archive: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
 // ReadResult should only be called after GetStatus reports an exited container
 // with exit code zero. The caller still validates the task-specific result.
 func (c Client) ReadResult(ctx context.Context, s Status, maxBytes int64) (json.RawMessage, error) {
@@ -239,26 +296,40 @@ func (c Client) call(parent context.Context, command string, args ...string) (st
 }
 
 func (c Client) callWithInput(parent context.Context, input []byte, command string, args ...string) (string, error) {
-	if c.Binary == "" || c.Config == "" {
-		return "", errors.New("Binary and Config are required")
-	}
 	// The remote call is short; the task container continues after SSH exits.
 	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
 	defer cancel()
+	cmd, err := c.newCommand(ctx, command, args...)
+	if err != nil {
+		return "", err
+	}
+	cmd.Stdin = bytes.NewReader(input)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("jobrunner %s: %w: %s", command, err, strings.TrimSpace(stderr.String()))
+	}
+	return stdout.String(), nil
+}
+
+func (c Client) newCommand(ctx context.Context, command string, args ...string) (*exec.Cmd, error) {
+	if c.Binary == "" || c.Config == "" {
+		return nil, errors.New("Binary and Config are required")
+	}
 	all := append([]string{command, "--config", c.Config}, args...)
 	var cmd *exec.Cmd
 	if c.Remote == "" {
 		cmd = exec.CommandContext(ctx, c.Binary, all...)
 	} else {
 		if strings.HasPrefix(c.Remote, "-") || strings.ContainsAny(c.Remote, " \t\r\n") {
-			return "", errors.New("invalid SSH destination")
+			return nil, errors.New("invalid SSH destination")
 		}
 		port := c.SSHPort
 		if port == 0 {
 			port = 22
 		}
 		if port < 1 || port > 65535 {
-			return "", errors.New("invalid SSH port")
+			return nil, errors.New("invalid SSH port")
 		}
 		sshBinary := c.SSHBinary
 		if sshBinary == "" {
@@ -273,13 +344,7 @@ func (c Client) callWithInput(parent context.Context, input []byte, command stri
 			"-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10",
 			"-p", strconv.Itoa(port), c.Remote, "exec "+strings.Join(quoted, " "))
 	}
-	cmd.Stdin = bytes.NewReader(input)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("jobrunner %s: %w: %s", command, err, strings.TrimSpace(stderr.String()))
-	}
-	return stdout.String(), nil
+	return cmd, nil
 }
 
 // OpenSSH sends its remote command to a shell; quote every argument separately.

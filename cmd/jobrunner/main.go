@@ -49,7 +49,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: jobrunner <start|describe|status|result|logs|wait|stop> [flags]")
+		return errors.New("usage: jobrunner <start|describe|status|result|logs|wait|stop|upload|archive> [flags]")
 	}
 	cmd := args[0]
 	f := flag.NewFlagSet(cmd, flag.ContinueOnError)
@@ -62,13 +62,16 @@ func run(args []string) error {
 	requestPath := f.String("request", "", "start request JSON (use - for stdin, keeps environment values out of argv)")
 	tail := f.Int("tail", 200, "number of recent log lines")
 	maxBytes := f.Int64("max-bytes", 32<<20, "maximum result.json size")
+	fileName := f.String("file-name", "", "uploaded file name (upload only)")
+	fileSize := f.Int64("size", -1, "exact input file size in bytes (upload only)")
+	checksum := f.String("sha256", "", "optional input SHA-256 hex digest (upload only)")
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
 	if cmd != "describe" && !validID.MatchString(*id) {
 		return errors.New("id must contain 1-64 letters, digits, underscores or hyphens")
 	}
-	if cmd != "describe" && *stage != "preview" && *stage != "apply" && *stage != "run" {
+	if cmd != "describe" && cmd != "upload" && cmd != "archive" && *stage != "preview" && *stage != "apply" && *stage != "run" {
 		return errors.New("stage must be preview, apply, or run")
 	}
 	if *tail < 0 || *tail > 10000 {
@@ -108,6 +111,11 @@ func run(args []string) error {
 	hostJobDir := filepath.Join(hostRoot, *id)
 
 	switch cmd {
+	case "upload":
+		return uploadFile(jobDir, *fileName, *fileSize, *checksum, os.Stdin, os.Stdout)
+	case "archive":
+		saveStageLogs(jobDir, *id)
+		return archiveJob(jobDir, *id, os.Stdout)
 	case "start":
 		t, err := cfg.Task(*taskType)
 		if err != nil || t.Image == "" || t.Memory == "" || t.CPUs == "" || t.Network == "" {
@@ -189,6 +197,9 @@ func run(args []string) error {
 			}
 		}
 		if err := os.MkdirAll(filepath.Join(jobDir, *stage, "output"), 0700); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Join(jobDir, "files"), 0700); err != nil {
 			return err
 		}
 		inputDst := filepath.Join(jobDir, *stage, "input.json")
@@ -320,6 +331,7 @@ func containerArgs(name, id, stage, kind, hostJobDir string, t jobconfig.TaskTyp
 		"--mount", "type=bind,src=" + filepath.Join(stageDir, "input.json") + ",dst=/job/input.json,readonly",
 		"--mount", "type=bind,src=" + filepath.Join(stageDir, "output") + ",dst=/job/output",
 	}
+	args = append(args, "--mount", "type=bind,src="+filepath.Join(hostJobDir, "files")+",dst=/job/files,readonly")
 	if stage == "apply" {
 		args = append(args, "--mount", "type=bind,src="+filepath.Join(hostJobDir, "preview", "output")+",dst=/job/preview,readonly")
 	}
