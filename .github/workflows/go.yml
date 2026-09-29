@@ -12,14 +12,5 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: gofmt -w cmd/jobrunner/main.go cmd/jobrunner/lifecycle.go cmd/jobrunner/lifecycle_test.go jobrunnerclient/client.go
-      - uses: actions/upload-artifact@v4
-        with:
-          name: formatted-lifecycle
-          path: |
-            cmd/jobrunner/main.go
-            cmd/jobrunner/lifecycle.go
-            cmd/jobrunner/lifecycle_test.go
-            jobrunnerclient/client.go
       - run: go test ./...
-      - run: test -z "$(gofmt -l cmd/jobrunner/main.go cmd/jobrunner/files.go cmd/jobrunner/files_test.go jobrunnerclient/client.go jobconfig/config.go jobconfig/config_test.go)"
+      - run: test -z "$(gofmt -l cmd/jobrunner/main.go cmd/jobrunner/files.go cmd/jobrunner/files_test.go cmd/jobrunner/lifecycle.go cmd/jobrunner/lifecycle_test.go jobrunnerclient/client.go jobconfig/config.go jobconfig/config_test.go)"
