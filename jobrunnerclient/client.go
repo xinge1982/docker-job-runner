@@ -48,6 +48,13 @@ type Status struct {
 	Output      string         `json:"output"`
 }
 
+// CompletedJob reports retained stage containers for an instance whose
+// existing stages have all finished. A nonzero exit code is still completed.
+type CompletedJob struct {
+	JobID  string                    `json:"job_id"`
+	Stages map[string]ContainerState `json:"stages"`
+}
+
 var validID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 func NewJobID() (string, error) {
@@ -254,6 +261,38 @@ func (c Client) DownloadArchive(ctx context.Context, id string, dst io.Writer) e
 	cmd.Stdout, cmd.Stderr = dst, &stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("jobrunner archive: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// ListCompleted returns job IDs with a directory and at least one retained
+// exited container. Preview-only jobs can appear before an apply stage starts.
+func (c Client) ListCompleted(ctx context.Context) ([]CompletedJob, error) {
+	out, err := c.call(ctx, "list-completed")
+	if err != nil {
+		return nil, err
+	}
+	var jobs []CompletedJob
+	if err := json.Unmarshal([]byte(out), &jobs); err != nil {
+		return nil, fmt.Errorf("decode completed jobs: %w", err)
+	}
+	return jobs, nil
+}
+
+// DeleteJob removes all retained stage containers and the instance directory.
+// The runner refuses deletion when any stage is still running or pending.
+func (c Client) DeleteJob(ctx context.Context, id string) error {
+	if !validID.MatchString(id) {
+		return errors.New("invalid job ID")
+	}
+	cmd, err := c.newCommand(ctx, "delete", "--id", id)
+	if err != nil {
+		return err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("jobrunner delete: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
 }

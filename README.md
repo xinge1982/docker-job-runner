@@ -106,6 +106,41 @@ If an archive download fails, discard the partial output file. Authorize
 the job ID against its owner in the main application's HTTP handlers before
 calling these methods.
 
+### Retain and clean up completed jobs
+
+Jobrunner does not automatically remove stopped containers or job directories.
+List instances with at least one retained stage container whose existing
+stages have all exited, then explicitly delete one instance when your main
+application has finished retaining its data:
+
+```bash
+jobrunner list-completed --config config.json
+jobrunner archive --config config.json --id roads001 > roads001.tar.gz
+jobrunner delete --config config.json --id roads001
+```
+
+`list-completed` returns a JSON array of `job_id` and `stages` with Docker
+states and exit codes. A failed stage with a nonzero exit code is still a
+completed instance. A finished `preview` can appear before the user starts
+`apply`; the main application's database determines when the entire business
+workflow is ready for cleanup. An upload-only directory has no container, so
+it is not included in this list, but can still be deleted by ID.
+
+`delete` checks all existing preview, apply and run containers for the ID,
+refuses running stages, verifies their jobrunner labels, removes the stopped
+containers, then removes the instance directory. A failed removal preserves
+the directory and can be retried. Archive before deleting if logs and files
+need to be retained. Jobrunner does not control Docker's external pruning;
+exclude retained job containers from any host-level cleanup policy.
+
+```go
+completed, err := runner.ListCompleted(ctx)
+if err != nil { return err }
+_ = completed // Reconcile with job ownership and workflow state in your DB.
+// After preserving the archive, and only when the application requests cleanup:
+if err := runner.DeleteJob(ctx, id); err != nil { return err }
+```
+
 
 ### Environment-based runner configuration
 

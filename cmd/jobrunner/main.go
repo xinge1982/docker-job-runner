@@ -49,7 +49,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: jobrunner <start|describe|status|result|logs|wait|stop|upload|archive> [flags]")
+		return errors.New("usage: jobrunner <start|describe|status|result|logs|wait|stop|upload|archive|list-completed|delete> [flags]")
 	}
 	cmd := args[0]
 	f := flag.NewFlagSet(cmd, flag.ContinueOnError)
@@ -68,10 +68,10 @@ func run(args []string) error {
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
-	if cmd != "describe" && !validID.MatchString(*id) {
+	if cmd != "describe" && cmd != "list-completed" && !validID.MatchString(*id) {
 		return errors.New("id must contain 1-64 letters, digits, underscores or hyphens")
 	}
-	if cmd != "describe" && cmd != "upload" && cmd != "archive" && *stage != "preview" && *stage != "apply" && *stage != "run" {
+	if cmd != "describe" && cmd != "upload" && cmd != "archive" && cmd != "list-completed" && cmd != "delete" && *stage != "preview" && *stage != "apply" && *stage != "run" {
 		return errors.New("stage must be preview, apply, or run")
 	}
 	if *tail < 0 || *tail > 10000 {
@@ -99,6 +99,13 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	if cmd == "start" || cmd == "upload" || cmd == "archive" || cmd == "delete" {
+		unlock, err := lockJob(root, *id)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
 	hostRoot := root
 	if cfg.HostWorkRoot != "" {
 		if !filepath.IsAbs(cfg.HostWorkRoot) {
@@ -111,6 +118,14 @@ func run(args []string) error {
 	hostJobDir := filepath.Join(hostRoot, *id)
 
 	switch cmd {
+	case "list-completed":
+		jobs, err := listCompletedJobs(root)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(jobs)
+	case "delete":
+		return deleteJob(root, *id)
 	case "upload":
 		return uploadFile(jobDir, *fileName, *fileSize, *checksum, os.Stdin, os.Stdout)
 	case "archive":
