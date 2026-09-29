@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/spf13/viper"
 )
 
 type Config struct {
@@ -124,6 +126,15 @@ var validEnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var integerValue = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
 
 func Load(filename string) (Config, error) {
+	v := viper.New()
+	v.SetConfigFile(filename)
+	v.SetEnvPrefix("JOBRUNNER")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
+	v.AutomaticEnv()
+	if err := v.ReadInConfig(); err != nil {
+		return Config{}, err
+	}
+	// Decode the original JSON to retain case-sensitive Docker environment names.
 	b, err := os.ReadFile(filename)
 	if err != nil {
 		return Config{}, err
@@ -132,7 +143,56 @@ func Load(filename string) (Config, error) {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return Config{}, err
 	}
+	// Only fixed scalar settings can be overridden. Runtime credentials are
+	// supplied separately by StartRequest.Environment.
+	override := func(key string, value *string) {
+		if v.IsSet(key) {
+			*value = v.GetString(key)
+		}
+	}
+	override("work_root", &c.WorkRoot)
+	override("host_work_root", &c.HostWorkRoot)
+	for name, task := range c.Tasks {
+		prefix := "tasks." + name + "."
+		override(prefix+"image", &task.Image)
+		override(prefix+"memory", &task.Memory)
+		override(prefix+"cpus", &task.CPUs)
+		override(prefix+"network", &task.Network)
+		override(prefix+"mode", &task.Mode)
+		override(prefix+"schema_argument", &task.SchemaArgument)
+		override(prefix+"work_dir", &task.WorkDir)
+		override(prefix+"env_file", &task.EnvFile)
+		for i := range task.Mounts {
+			var err error
+			task.Mounts[i].Source, err = expandConfigEnv(task.Mounts[i].Source)
+			if err != nil {
+				return Config{}, fmt.Errorf("task %q mount %d: %w", name, i, err)
+			}
+		}
+		c.Tasks[name] = task
+	}
 	return c, nil
+}
+
+// expandConfigEnv resolves host paths in mount sources. An unset variable is
+// an error so a misspelled path never silently becomes a different mount.
+func expandConfigEnv(value string) (string, error) {
+	var missing string
+	result := os.Expand(value, func(name string) string {
+		if !validEnvName.MatchString(name) {
+			missing = name
+			return ""
+		}
+		found, ok := os.LookupEnv(name)
+		if !ok {
+			missing = name
+		}
+		return found
+	})
+	if missing != "" {
+		return "", fmt.Errorf("missing environment variable %q", missing)
+	}
+	return result, nil
 }
 
 func (c Config) Task(name string) (TaskType, error) {

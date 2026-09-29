@@ -55,6 +55,28 @@ configuration. For a host-side runner, `work_root` resolves to a host path and
 
 ## Run existing binaries or Python scripts in standard images
 
+### Environment-based runner configuration
+
+`jobconfig.Load` reads JSON through Viper. Set `JOBRUNNER_`-prefixed
+environment variables to override fixed scalar settings. Use two underscores
+between nested names; task names in variable names are uppercase. For example:
+
+```bash
+export JOBRUNNER_WORK_ROOT=/srv/jobrunner/jobs
+export JOBRUNNER_HOST_WORK_ROOT=/srv/jobrunner/jobs
+export JOBRUNNER_TASKS__TILESET_BUILD__NETWORK=sign_default
+```
+
+Supported task fields are `image`, `memory`, `cpus`, `network`, `mode`,
+`schema_argument`, `work_dir`, and `env_file`. For mount source paths in JSON,
+use `${PROGRAM_PATH}` placeholders, such as
+`"source": "${PROGRAM_PATH}/tileset-lod-tool"`, and set `PROGRAM_PATH` in
+the runner process environment. An unset placeholder stops config loading.
+The command, mount targets, and declared job parameters remain fixed in JSON.
+Job connection details and credentials belong in each start request's
+`environment` values; `JOBRUNNER_` variables configure the runner itself.
+
+
 `config.example.json` runs on the host. `config.in-container.example.json`
 runs in the SSH jobrunner container. Both configure `tileset_build` and
 `feature_road_id` with `alpine:3.14`, and a replaceable `missing_poles`

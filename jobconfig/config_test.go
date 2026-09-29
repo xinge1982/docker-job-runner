@@ -3,8 +3,46 @@ package jobconfig
 import (
 	"encoding/json"
 	"reflect"
+	"os"
+	"path/filepath"
 	"testing"
 )
+
+func TestLoadViperEnvironment(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "config.json")
+	contents := `{"work_root":"/old/jobs","tasks":{"road_job":{"image":"alpine:3.14","network":"old","command":["/app/road"],"mounts":[{"source":"${PROGRAM_PATH}/road","target":"/app/road","read_only":true}],"environment":{"POSTGRES_HOST":"postgres"}}}}`
+	if err := os.WriteFile(filename, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("JOBRUNNER_WORK_ROOT", "/new/jobs")
+	t.Setenv("JOBRUNNER_HOST_WORK_ROOT", "/host/jobs")
+	t.Setenv("JOBRUNNER_TASKS__ROAD_JOB__NETWORK", "sign_default")
+	t.Setenv("PROGRAM_PATH", "/srv/programs")
+	config, err := Load(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.WorkRoot != "/new/jobs" || config.HostWorkRoot != "/host/jobs" {
+		t.Fatalf("unexpected roots: %#v", config)
+	}
+	task := config.Tasks["road_job"]
+	if task.Network != "sign_default" || task.Image != "alpine:3.14" || task.Mounts[0].Source != "/srv/programs/road" {
+		t.Fatalf("unexpected task: %#v", task)
+	}
+	if _, ok := task.Environment["POSTGRES_HOST"]; !ok {
+		t.Fatalf("environment name lost its case: %#v", task.Environment)
+	}
+}
+
+func TestLoadMissingMountEnvironment(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(filename, []byte(`{"tasks":{"job":{"mounts":[{"source":"${MISSING_MOUNT_PATH}/data","target":"/data"}]}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(filename); err == nil {
+		t.Fatal("expected an error for an unset mount path variable")
+	}
+}
 
 func TestFormatParameters(t *testing.T) {
 	task := TaskType{Parameters: []TaskParameter{
