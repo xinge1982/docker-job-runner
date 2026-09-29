@@ -1,10 +1,18 @@
 """Demo adapter only: replace the candidate logic with an existing program."""
 import argparse
 import json
+import sys
 from pathlib import Path
 
 
 def main():
+    if sys.argv[1:] == ["--jobrunner-schema"]:
+        print(json.dumps({
+            "version": 1,
+            "parameters": [],
+            "environment_variables": [],
+        }))
+        return
     parser = argparse.ArgumentParser()
     parser.add_argument("--stage", choices=("preview", "apply"), required=True)
     parser.add_argument("--input", required=True)

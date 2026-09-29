@@ -5,13 +5,15 @@
       "image": "local/job-worker:demo",
       "memory": "1g",
       "cpus": "1.0",
-      "network": "none"
+      "network": "none",
+      "schema_argument": "--jobrunner-schema"
     },
     "missing_poles": {
       "image": "local/job-worker:demo",
       "memory": "1g",
       "cpus": "1.0",
-      "network": "none"
+      "network": "none",
+      "schema_argument": "--jobrunner-schema"
     }
   }
 }

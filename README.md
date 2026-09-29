@@ -76,15 +76,21 @@ the stage's writable output directory. Configure a job result writer to create
 business files in the configured `networks` mount.
 
 The task definition fixes the image, command, work directory, mounts, network
-and resource limits. Each entry under `parameters` defines a runtime parameter:
-`name`, target `flag`, `type` (`string`, `path`, `integer`, `number`, or
-`boolean`), `required`, and optional `pattern` or `allowed_values`.
-Paths also require `path_prefix`; the runner rejects traversal. Validated
-values become separate `-flag=value` process arguments, without a shell.
-`environment_variables` declares runtime environment variable names, whether
-they are required, and whether they contain secrets. The actual addresses,
-ports and credentials are supplied at start time, never stored in the config.
-The fixed `environment` map is for public defaults such as `TZ`.
+and resource limits. Set `schema_argument: "--jobrunner-schema"` once the
+configured program supports the schema protocol below. The runner then reads
+`parameters` and `environment_variables` from the program at each
+`describe` and `start` call; they do not have to be duplicated in
+`config.json`. A task without `schema_argument` keeps the previous static
+declarations for compatibility. When discovery is enabled, its output is
+authoritative.
+
+Each parameter declares `name`, target `flag`, and `type` (`string`,
+`path`, `integer`, `number`, or `boolean`), plus `required` and optional
+`pattern` or `allowed_values`. Paths require `path_prefix`; the runner
+rejects traversal. Validated values become separate `-flag=value` process
+arguments, without a shell. Environment declarations contain names and
+`required` / `secret` metadata, never addresses or credentials. The fixed
+`environment` map remains suitable for public defaults such as `TZ`.
 
 Docker Engine resolves `mounts[*].source` on the *host*, including when the
 runner CLI runs inside the SSH container. The runner container does not need
@@ -93,17 +99,65 @@ the program or network directories mounted into itself. The optional legacy
 file on the runner filesystem; new tasks use `environment_variables`.
 
 Use `jobrunner describe --config config.json --type tileset_build` to retrieve
-the same Go task object that the runner uses. From the main program, call
+the discovered task object. From the main program, call
 `runner.DescribeTask(ctx, "tileset_build")`, inspect `Parameters` and
 `EnvironmentVariables`, then submit `jobconfig.StartRequest`. The request
 JSON travels over stdin, including when the client connects over SSH.
 If the main program has a local copy of the task catalog, it can instead use
-`jobconfig.Load(path)` and `config.Task(name)`. `DescribeTask` reads the
-remote runner's active configuration and avoids maintaining a second copy.
+`jobconfig.Load(path)` and `config.Task(name)` for fixed fields only.
+`DescribeTask` reads the active remote program's parameter declarations;
+local config alone cannot discover a program's schema.
 Environment values are passed to the Docker CLI through its process
 environment with `--env NAME` and never appear in the CLI or SSH argument
 list. The Docker daemon still stores container environment values in its
 container metadata; restrict access to the daemon accordingly.
+
+### Schema protocol implemented by each job program
+
+With `schema_argument` enabled, jobrunner runs the configured image and
+`command` followed by exactly `--jobrunner-schema`. The program must print
+one JSON object on stdout and exit 0 without doing business work. It must not
+need database, object storage, or network access for this operation. Human
+`--help` output remains free-form; use the dedicated argument for automation.
+For a binary with subcommands, the invocation is
+`program subcommand --jobrunner-schema`.
+
+```json
+{
+  "version": 1,
+  "parameters": [
+    {
+      "name": "config",
+      "flag": "-c",
+      "type": "path",
+      "required": true,
+      "path_prefix": "networks/",
+      "pattern": "networks/[A-Za-z0-9_./-]+[.]yaml"
+    },
+    {
+      "name": "tileset_type",
+      "flag": "-tileset-type",
+      "type": "string",
+      "required": true,
+      "allowed_values": ["bridges", "roads", "signs"]
+    }
+  ],
+  "environment_variables": [
+    {"name": "POSTGRES_HOST", "required": true},
+    {"name": "POSTGRES_PASSWORD", "required": true, "secret": true}
+  ]
+}
+```
+
+The response is limited to 64 KiB and only version 1 is accepted. Discovery
+runs with no network, no worker credentials or environment file, a read-only
+filesystem, read-only copies of the configured mounts, limited resources, and
+a short timeout. Keep the image present on the Docker host; discovery does
+not pull images. Implement the flag in the existing Go or Python job before
+using the updated `config.example.json` or
+`config.in-container.example.json`. These files now enable discovery for
+all three standard-image jobs. The bundled demo worker also implements the
+flag, so `config.demo.example.json` can be run immediately.
 
 ```bash
 cp config.example.json config.json

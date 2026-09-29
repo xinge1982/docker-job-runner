@@ -26,74 +26,8 @@
         "/app/programs/tileset-lod-tool",
         "feature-tileset-build"
       ],
-      "parameters": [
-        {
-          "name": "config",
-          "flag": "-c",
-          "required": true,
-          "pattern": "networks/[A-Za-z0-9_./-]+[.]yaml",
-          "type": "path",
-          "path_prefix": "networks/"
-        },
-        {
-          "name": "output_path",
-          "flag": "-output-path",
-          "required": true,
-          "pattern": "networks/[A-Za-z0-9_./-]+",
-          "type": "path",
-          "path_prefix": "networks/"
-        },
-        {
-          "name": "tileset_type",
-          "flag": "-tileset-type",
-          "required": true,
-          "pattern": "[A-Za-z0-9_-]+",
-          "type": "string",
-          "allowed_values": [
-            "bridges",
-            "roads",
-            "signs"
-          ]
-        }
-      ],
       "mode": "direct",
-      "environment_variables": [
-        {
-          "name": "POSTGRES_HOST",
-          "required": true
-        },
-        {
-          "name": "POSTGRES_PORT",
-          "required": true
-        },
-        {
-          "name": "POSTGRES_USER",
-          "required": true
-        },
-        {
-          "name": "POSTGRES_PASSWORD",
-          "required": true,
-          "secret": true
-        },
-        {
-          "name": "MINIO_OUTPUT_HOST",
-          "required": true
-        },
-        {
-          "name": "MINIO_OUTPUT_PORT",
-          "required": true
-        },
-        {
-          "name": "MINIO_OUTPUT_ACCKEY",
-          "required": true,
-          "secret": true
-        },
-        {
-          "name": "MINIO_OUTPUT_SECKEY",
-          "required": true,
-          "secret": true
-        }
-      ]
+      "schema_argument": "--jobrunner-schema"
     },
     "feature_road_id": {
       "image": "alpine:3.14",
@@ -120,50 +54,8 @@
         "/app/programs/map-tool",
         "feature-road-id"
       ],
-      "parameters": [
-        {
-          "name": "config",
-          "flag": "-c",
-          "required": true,
-          "pattern": "networks/[A-Za-z0-9_./-]+[.]yaml",
-          "type": "path",
-          "path_prefix": "networks/"
-        },
-        {
-          "name": "road_area_table",
-          "flag": "-road-area-table",
-          "required": true,
-          "pattern": "[A-Za-z_][A-Za-z0-9_]*",
-          "type": "string"
-        },
-        {
-          "name": "feature_table",
-          "flag": "-feature-table",
-          "required": true,
-          "pattern": "[A-Za-z_][A-Za-z0-9_]*",
-          "type": "string"
-        }
-      ],
       "mode": "direct",
-      "environment_variables": [
-        {
-          "name": "POSTGRES_HOST",
-          "required": true
-        },
-        {
-          "name": "POSTGRES_PORT",
-          "required": true
-        },
-        {
-          "name": "POSTGRES_USER",
-          "required": true
-        },
-        {
-          "name": "POSTGRES_PASSWORD",
-          "required": true,
-          "secret": true
-        }
-      ]
+      "schema_argument": "--jobrunner-schema"
     },
     "missing_poles": {
       "image": "python:3.11-alpine",
@@ -192,27 +84,8 @@
         "--input=/job/input.json",
         "--output=/job/output/result.json"
       ],
-      "parameters": [],
       "mode": "direct",
-      "environment_variables": [
-        {
-          "name": "POSTGRES_HOST",
-          "required": true
-        },
-        {
-          "name": "POSTGRES_PORT",
-          "required": true
-        },
-        {
-          "name": "POSTGRES_USER",
-          "required": true
-        },
-        {
-          "name": "POSTGRES_PASSWORD",
-          "required": true,
-          "secret": true
-        }
-      ]
+      "schema_argument": "--jobrunner-schema"
     }
   }
 }

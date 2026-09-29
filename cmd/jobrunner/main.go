@@ -83,6 +83,10 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
+		task, err = discoverTask(context.Background(), task)
+		if err != nil {
+			return err
+		}
 		return json.NewEncoder(os.Stdout).Encode(task)
 	}
 	if cfg.WorkRoot == "" {
@@ -120,6 +124,10 @@ func run(args []string) error {
 		}
 		if t.Mode != "" && t.Mode != "staged" && t.Mode != "direct" {
 			return errors.New("invalid task mode")
+		}
+		t, err = discoverTask(context.Background(), t)
+		if err != nil {
+			return err
 		}
 		var req jobconfig.StartRequest
 		if *requestPath != "" {

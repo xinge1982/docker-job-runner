@@ -57,3 +57,24 @@ func TestValidateEnvironment(t *testing.T) {
 		}
 	}
 }
+
+func TestWithSchemaRejectsInvalidDeclarations(t *testing.T) {
+	base := TaskType{Environment: map[string]string{"TZ": "Asia/Shanghai"}}
+	valid := Schema{Version: 1, Parameters: []TaskParameter{
+		{Name: "config", Flag: "-c", Type: "path", PathPrefix: "networks/"},
+	}, EnvironmentVariables: []EnvironmentVar{{Name: "POSTGRES_HOST", Required: true}}}
+	if _, err := base.WithSchema(valid); err != nil {
+		t.Fatal(err)
+	}
+	bad := valid
+	bad.Parameters = append([]TaskParameter(nil), valid.Parameters...)
+	bad.Parameters = append(bad.Parameters, valid.Parameters[0])
+	if _, err := base.WithSchema(bad); err == nil {
+		t.Fatal("duplicate parameter accepted")
+	}
+	bad = valid
+	bad.Version = 2
+	if _, err := base.WithSchema(bad); err == nil {
+		t.Fatal("unsupported schema version accepted")
+	}
+}

@@ -25,6 +25,8 @@ type TaskType struct {
 	Network              string            `json:"network"`
 	Mode                 string            `json:"mode,omitempty"`
 	Command              []string          `json:"command,omitempty"`
+	// SchemaArgument enables machine-readable discovery from the fixed command.
+	SchemaArgument       string            `json:"schema_argument,omitempty"`
 	WorkDir              string            `json:"work_dir,omitempty"`
 	Mounts               []TaskMount       `json:"mounts,omitempty"`
 	EnvFile              string            `json:"env_file,omitempty"`
@@ -53,6 +55,60 @@ type EnvironmentVar struct {
 	Name     string `json:"name"`
 	Required bool   `json:"required,omitempty"`
 	Secret   bool   `json:"secret,omitempty"`
+}
+
+// Schema is the only accepted stdout document for a schema query.
+// Version 1 contains declarations, never runtime values or credentials.
+type Schema struct {
+	Version              int              `json:"version"`
+	Parameters           []TaskParameter  `json:"parameters"`
+	EnvironmentVariables []EnvironmentVar `json:"environment_variables"`
+}
+
+func (t TaskType) WithSchema(schema Schema) (TaskType, error) {
+	if schema.Version != 1 {
+		return TaskType{}, fmt.Errorf("unsupported job schema version %d", schema.Version)
+	}
+	if len(schema.Parameters) > 128 || len(schema.EnvironmentVariables) > 128 {
+		return TaskType{}, errors.New("job schema has too many declarations")
+	}
+	t.Parameters = schema.Parameters
+	t.EnvironmentVariables = schema.EnvironmentVariables
+	parameterNames := make(map[string]bool)
+	flags := make(map[string]bool)
+	for _, spec := range t.Parameters {
+		if !validName.MatchString(spec.Name) || !validFlag.MatchString(spec.Flag) ||
+			parameterNames[spec.Name] || flags[spec.Flag] {
+			return TaskType{}, fmt.Errorf("invalid or duplicate parameter declaration %q", spec.Name)
+		}
+		parameterNames[spec.Name], flags[spec.Flag] = true, true
+		if spec.Type != "string" && spec.Type != "path" && spec.Type != "integer" &&
+			spec.Type != "number" && spec.Type != "boolean" {
+			return TaskType{}, fmt.Errorf("invalid parameter type %q", spec.Type)
+		}
+		if spec.Type == "path" && (!strings.HasSuffix(spec.PathPrefix, "/") ||
+			path.IsAbs(spec.PathPrefix) ||
+			path.Clean(spec.PathPrefix) != strings.TrimSuffix(spec.PathPrefix, "/") ||
+			strings.Contains("/"+spec.PathPrefix, "/../")) {
+			return TaskType{}, fmt.Errorf("invalid path prefix for %q", spec.Name)
+		}
+		if spec.Pattern != "" {
+			if _, err := regexp.Compile("^(?:" + spec.Pattern + ")$"); err != nil {
+				return TaskType{}, fmt.Errorf("invalid pattern for %q: %w", spec.Name, err)
+			}
+		}
+	}
+	envNames := make(map[string]bool)
+	for _, spec := range t.EnvironmentVariables {
+		if !validEnvName.MatchString(spec.Name) || envNames[spec.Name] {
+			return TaskType{}, fmt.Errorf("invalid or duplicate environment variable %q", spec.Name)
+		}
+		if _, fixed := t.Environment[spec.Name]; fixed {
+			return TaskType{}, fmt.Errorf("environment variable %q is also fixed", spec.Name)
+		}
+		envNames[spec.Name] = true
+	}
+	return t, nil
 }
 
 // StartRequest carries runtime values. Environment values never enter argv.
