@@ -9,7 +9,7 @@ if not exist %mypath%build\ mkdir %mypath%build\
 
 
 REM ********************************************
-REM 编译cmds
+REM Build commands
 
 CD cmd
 FOR /D %%G in ("*") DO (

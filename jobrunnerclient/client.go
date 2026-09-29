@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/xinge1982/docker-job-runner/jobconfig"
 )
 
 type Client struct {
@@ -78,6 +80,57 @@ func (c Client) StartRunWithParams(ctx context.Context, id, taskType string, inp
 	return c.start(ctx, id, taskType, "run", input, params)
 }
 
+// DescribeTask exposes the configured parameter and environment requirements.
+// It works for both local and SSH-backed runners.
+func (c Client) DescribeTask(ctx context.Context, taskType string) (jobconfig.TaskType, error) {
+	if taskType == "" {
+		return jobconfig.TaskType{}, errors.New("task type is required")
+	}
+	out, err := c.call(ctx, "describe", "--type", taskType)
+	if err != nil {
+		return jobconfig.TaskType{}, err
+	}
+	var task jobconfig.TaskType
+	if err := json.Unmarshal([]byte(out), &task); err != nil {
+		return task, fmt.Errorf("decode task specification: %w", err)
+	}
+	return task, nil
+}
+
+func (c Client) StartRunRequest(ctx context.Context, id, taskType string, request jobconfig.StartRequest) (string, error) {
+	return c.startRequest(ctx, id, taskType, "run", request)
+}
+
+func (c Client) StartPreviewRequest(ctx context.Context, id, taskType string, request jobconfig.StartRequest) (string, error) {
+	return c.startRequest(ctx, id, taskType, "preview", request)
+}
+
+func (c Client) StartApplyRequest(ctx context.Context, id, taskType string, request jobconfig.StartRequest) (string, error) {
+	return c.startRequest(ctx, id, taskType, "apply", request)
+}
+
+func (c Client) startRequest(ctx context.Context, id, taskType, stage string, request jobconfig.StartRequest) (string, error) {
+	if err := checkIDStage(id, stage); err != nil {
+		return "", err
+	}
+	if !json.Valid(request.Input) || len(request.Input) > 32<<20 {
+		return "", errors.New("input must be valid JSON and at most 32 MiB")
+	}
+	b, err := json.Marshal(request)
+	if err != nil {
+		return "", err
+	}
+	if len(b) > 32<<20 {
+		return "", errors.New("start request exceeds 32 MiB")
+	}
+	out, err := c.callWithInput(ctx, b, "start", "--id", id, "--type", taskType,
+		"--stage", stage, "--request", "-")
+	if err != nil {
+		return "", err
+	}
+	return parseContainerID(out)
+}
+
 func (c Client) start(ctx context.Context, id, taskType, stage string, input json.RawMessage, params map[string]string) (string, error) {
 	if !validID.MatchString(id) {
 		return "", errors.New("invalid job ID")
@@ -100,6 +153,10 @@ func (c Client) start(ctx context.Context, id, taskType, stage string, input jso
 	if err != nil {
 		return "", err
 	}
+	return parseContainerID(out)
+}
+
+func parseContainerID(out string) (string, error) {
 	for _, field := range strings.Fields(out) {
 		if strings.HasPrefix(field, "container_id=") {
 			return strings.TrimPrefix(field, "container_id="), nil

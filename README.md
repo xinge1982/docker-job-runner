@@ -13,7 +13,7 @@ cd docker-job-runner
 docker build -t local/job-worker:demo ./example-worker
 cp config.demo.example.json config.json
 # Work directories default to ./jobs; the runner resolves this to a host path.
-go build -o jobrunner .
+go build -o jobrunner ./cmd/jobrunner
 ./jobrunner start  --config config.json --id example001 --type line_models --stage preview --input preview.example.json
 ./jobrunner status --config config.json --id example001 --stage preview
 ./jobrunner logs   --config config.json --id example001 --stage preview --tail 100
@@ -75,49 +75,95 @@ the stage's writable output directory. Configure a job result writer to create
 `wait`, and `logs` work without that file. The two Go examples write their
 business files in the configured `networks` mount.
 
-Create a private environment file visible to the runner. Use
-`/srv/jobrunner/worker.env` for the host CLI, or mount that file into the SSH
-runner at `/etc/jobrunner/worker.env` as shown in
-`compose.ssh.example.yaml`. Add your actual database and storage variables
-there, one `NAME=value` entry per line; do not commit this file. Keep
-`config.json` private when it contains deployment-specific paths. The Docker
-CLI reads `env_file` from the runner filesystem. Docker Engine resolves
-`mounts[*].source` on the *host*, including when the CLI runs inside the SSH
-runner container. The jobrunner container does not need the programs or network
-data mounted into itself.
+The task definition fixes the image, command, work directory, mounts, network
+and resource limits. Each entry under `parameters` defines a runtime parameter:
+`name`, target `flag`, `type` (`string`, `path`, `integer`, `number`, or
+`boolean`), `required`, and optional `pattern` or `allowed_values`.
+Paths also require `path_prefix`; the runner rejects traversal. Validated
+values become separate `-flag=value` process arguments, without a shell.
+`environment_variables` declares runtime environment variable names, whether
+they are required, and whether they contain secrets. The actual addresses,
+ports and credentials are supplied at start time, never stored in the config.
+The fixed `environment` map is for public defaults such as `TZ`.
 
-Submit the program's command flags with `--params` as a JSON object. Each
-accepted name, target flag, required value, and optional regular expression
-is declared under `parameters` in the task configuration. The runner appends
-each `-flag=value` as a separate process argument, without a shell. Unknown
-names, missing required parameters, and values that fail their pattern are
-rejected. The separate `--input` JSON file remains available to the program
-at `/job/input.json`.
+Docker Engine resolves `mounts[*].source` on the *host*, including when the
+runner CLI runs inside the SSH container. The runner container does not need
+the program or network directories mounted into itself. The optional legacy
+`env_file` setting remains available for deployments that supply a private
+file on the runner filesystem; new tasks use `environment_variables`.
+
+Use `jobrunner describe --config config.json --type tileset_build` to retrieve
+the same Go task object that the runner uses. From the main program, call
+`runner.DescribeTask(ctx, "tileset_build")`, inspect `Parameters` and
+`EnvironmentVariables`, then submit `jobconfig.StartRequest`. The request
+JSON travels over stdin, including when the client connects over SSH.
+If the main program has a local copy of the task catalog, it can instead use
+`jobconfig.Load(path)` and `config.Task(name)`. `DescribeTask` reads the
+remote runner's active configuration and avoids maintaining a second copy.
+Environment values are passed to the Docker CLI through its process
+environment with `--env NAME` and never appear in the CLI or SSH argument
+list. The Docker daemon still stores container environment values in its
+container metadata; restrict access to the daemon accordingly.
 
 ```bash
 cp config.example.json config.json
-printf 'POSTGRES_HOST=postgres\nPOSTGRES_PORT=5432\nPOSTGRES_USER=postgres\n' > /srv/jobrunner/worker.env
-chmod 0600 /srv/jobrunner/worker.env
-printf '{}\n' > run.example.json
-./jobrunner start --config config.json --id bridges001 --type tileset_build --stage run \
-  --input run.example.json \
-  --params '{"config":"networks/config_jiangsu_1031.yaml","output_path":"networks/network_jiangsu_1031/tilesets/bridges","tileset_type":"bridges"}'
+./jobrunner describe --config config.json --type tileset_build
+# Create a private request.json with input, parameters and environment.
+./jobrunner start --config config.json --id bridges001 --type tileset_build \
+  --stage run --request request.json
 ./jobrunner status --config config.json --id bridges001 --stage run
 ./jobrunner logs --config config.json --id bridges001 --stage run
 ./jobrunner wait --config config.json --id bridges001 --stage run
 ```
 
-Add the remaining required database and storage settings to the environment
-file locally. Make sure the Docker network `sign_default` exists. The runner
-does not create it. Run jobrunner under an account that can read the environment
-file and use Docker. A direct task can also be submitted through the Go client:
+For manual testing, `request.json` has this shape. Replace the placeholder
+values locally; never commit a request containing credentials:
+
+```json
+{
+  "input": {},
+  "parameters": {
+    "config": "networks/config_jiangsu_1031.yaml",
+    "output_path": "networks/network_jiangsu_1031/tilesets/bridges",
+    "tileset_type": "bridges"
+  },
+  "environment": {
+    "POSTGRES_HOST": "postgres",
+    "POSTGRES_PORT": "5432",
+    "POSTGRES_USER": "postgres",
+    "POSTGRES_PASSWORD": "<set-locally>",
+    "MINIO_OUTPUT_HOST": "minio",
+    "MINIO_OUTPUT_PORT": "59000",
+    "MINIO_OUTPUT_ACCKEY": "<set-locally>",
+    "MINIO_OUTPUT_SECKEY": "<set-locally>"
+  }
+}
+```
+
+The request file is useful for manual testing; protect it because it contains
+credentials. An application should use `--request -` over stdin instead. Make
+sure the Docker network `sign_default` exists. A direct task can be submitted
+through the Go client using the same contract:
 
 ```go
-containerID, err := runner.StartRunWithParams(ctx, id, "feature_road_id",
-    json.RawMessage(`{}`), map[string]string{
-        "config": "networks/config_jiangsu_2026.yaml",
-        "road_area_table": "hdroad_area0924",
-        "feature_table": "hdtraffic_ene",
+task, err := runner.DescribeTask(ctx, "feature_road_id")
+if err != nil { return err }
+// task.Parameters and task.EnvironmentVariables describe the required fields.
+_ = task
+containerID, err := runner.StartRunRequest(ctx, id, "feature_road_id",
+    jobconfig.StartRequest{
+        Input: json.RawMessage(`{}`),
+        Parameters: map[string]json.RawMessage{
+            "config": json.RawMessage(`"networks/config_jiangsu_2026.yaml"`),
+            "road_area_table": json.RawMessage(`"hdroad_area0924"`),
+            "feature_table": json.RawMessage(`"hdtraffic_ene"`),
+        },
+        Environment: map[string]string{
+            "POSTGRES_HOST": dbHost,
+            "POSTGRES_PORT": dbPort,
+            "POSTGRES_USER": dbUser,
+            "POSTGRES_PASSWORD": dbPassword,
+        },
     })
 _ = containerID
 if err != nil { return err }
@@ -157,9 +203,10 @@ socket inside the public API container.
 ## Call from a Go main service
 
 The standard-library-only `jobrunnerclient` package wraps the CLI. Build both
-executables into the main image. For this demonstration module, import it as
-`example.com/docker-job-runner/jobrunnerclient`; in your application, copy the
-package into your own module and change the import path.
+executables into the main image. Import
+`github.com/xinge1982/docker-job-runner/jobrunnerclient` and
+`github.com/xinge1982/docker-job-runner/jobconfig` through
+your application's Go module dependency.
 
 ```go
 runner := jobrunnerclient.Client{
@@ -258,16 +305,12 @@ On the Linux host, build the Linux runner binary and prepare persistent paths:
 
 ```bash
 cd docker-job-runner
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o jobrunner .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o jobrunner ./cmd/jobrunner
 install -d -m 0700 /srv/jobrunner/ssh/hostkeys
 install -d -m 0700 /srv/jobrunner/ssh
 install -d -o 10001 -g 10001 -m 0700 /srv/jobrunner/jobs
 install -d -m 0755 /srv/jobrunner/programs /srv/jobrunner/networks
 cp config.in-container.example.json /srv/jobrunner/config.json
-# Add the required variables locally and let the jobrunner user read this file.
-touch /srv/jobrunner/worker.env
-chown 10001:10001 /srv/jobrunner/worker.env
-chmod 0600 /srv/jobrunner/worker.env
 # Put only trusted clients' SSH public keys into this file.
 touch /srv/jobrunner/ssh/authorized_keys
 chmod 0644 /srv/jobrunner/ssh/authorized_keys
@@ -301,8 +344,8 @@ and port 22; it needs an SSH client, its own private key, and a trusted
 `work_root` is `/jobrunner/jobs` inside the runner container, while
 `host_work_root` is `/srv/jobrunner/jobs` for the Docker daemon's bind mounts.
 `mounts[*].source` in the task configuration also refers to paths on the
-Docker host. `env_file` instead refers to `/etc/jobrunner/worker.env` inside
-the runner container; Compose mounts the host environment file there.
+Docker host. Runtime environment variables travel over SSH stdin and are
+injected into the child container at creation time.
 The SSH login user has UID 10001; the entrypoint adds it to the socket's
 numeric group before starting sshd. Access to the Docker socket grants broad
 control over the host, so this container and its SSH keys should be treated as

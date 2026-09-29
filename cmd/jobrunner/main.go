@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,41 +12,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/xinge1982/docker-job-runner/jobconfig"
 )
 
-// Only these task types, images and networks may be selected by a caller.
-type TaskType struct {
-	Image       string            `json:"image"`
-	Memory      string            `json:"memory"`
-	CPUs        string            `json:"cpus"`
-	Network     string            `json:"network"`
-	Mode        string            `json:"mode,omitempty"`
-	Command     []string          `json:"command,omitempty"`
-	WorkDir     string            `json:"work_dir,omitempty"`
-	Mounts      []TaskMount       `json:"mounts,omitempty"`
-	EnvFile     string            `json:"env_file,omitempty"`
-	Environment map[string]string `json:"environment,omitempty"`
-	Parameters  []TaskParameter   `json:"parameters,omitempty"`
-}
-type TaskMount struct {
-	Source   string `json:"source"`
-	Target   string `json:"target"`
-	ReadOnly bool   `json:"read_only"`
-}
-type TaskParameter struct {
-	Name     string `json:"name"`
-	Flag     string `json:"flag"`
-	Required bool   `json:"required,omitempty"`
-	Pattern  string `json:"pattern,omitempty"`
-}
-type Config struct {
-	WorkRoot     string              `json:"work_root"`
-	HostWorkRoot string              `json:"host_work_root"`
-	Tasks        map[string]TaskType `json:"tasks"`
-}
 type ContainerState struct {
 	Status     string `json:"Status"`
 	Running    bool   `json:"Running"`
@@ -64,7 +38,6 @@ type Result struct {
 }
 
 var validID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
-var validFlag = regexp.MustCompile(`^-{1,2}[a-zA-Z][a-zA-Z0-9-]*$`)
 var validEnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func main() {
@@ -76,7 +49,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: jobrunner <start|status|result|logs|wait|stop> [flags]")
+		return errors.New("usage: jobrunner <start|describe|status|result|logs|wait|stop> [flags]")
 	}
 	cmd := args[0]
 	f := flag.NewFlagSet(cmd, flag.ContinueOnError)
@@ -86,27 +59,31 @@ func run(args []string) error {
 	taskType := f.String("type", "", "configured task type (start only)")
 	input := f.String("input", "", "input JSON (preview) or approved JSON (apply)")
 	params := f.String("params", "{}", "JSON object with configured command parameters (start only)")
+	requestPath := f.String("request", "", "start request JSON (use - for stdin, keeps environment values out of argv)")
 	tail := f.Int("tail", 200, "number of recent log lines")
 	maxBytes := f.Int64("max-bytes", 32<<20, "maximum result.json size")
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
-	if !validID.MatchString(*id) {
+	if cmd != "describe" && !validID.MatchString(*id) {
 		return errors.New("id must contain 1-64 letters, digits, underscores or hyphens")
 	}
-	if *stage != "preview" && *stage != "apply" && *stage != "run" {
+	if cmd != "describe" && *stage != "preview" && *stage != "apply" && *stage != "run" {
 		return errors.New("stage must be preview, apply, or run")
 	}
 	if *tail < 0 || *tail > 10000 {
 		return errors.New("tail must be between 0 and 10000")
 	}
-	data, err := os.ReadFile(*configPath)
+	cfg, err := jobconfig.Load(*configPath)
 	if err != nil {
 		return err
 	}
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return err
+	if cmd == "describe" {
+		task, err := cfg.Task(*taskType)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(task)
 	}
 	if cfg.WorkRoot == "" {
 		return errors.New("work_root is required")
@@ -128,11 +105,8 @@ func run(args []string) error {
 
 	switch cmd {
 	case "start":
-		if *input == "" {
-			return errors.New("--input is required")
-		}
-		t, ok := cfg.Tasks[*taskType]
-		if !ok || t.Image == "" || t.Memory == "" || t.CPUs == "" || t.Network == "" {
+		t, err := cfg.Task(*taskType)
+		if err != nil || t.Image == "" || t.Memory == "" || t.CPUs == "" || t.Network == "" {
 			return errors.New("unknown or incomplete configured task type")
 		}
 		if t.Mode == "direct" && *stage != "run" {
@@ -147,8 +121,51 @@ func run(args []string) error {
 		if t.Mode != "" && t.Mode != "staged" && t.Mode != "direct" {
 			return errors.New("invalid task mode")
 		}
-		commandArgs, err := commandParameters(t.Parameters, *params)
+		var req jobconfig.StartRequest
+		if *requestPath != "" {
+			if *input != "" || *params != "{}" {
+				return errors.New("--request cannot be combined with --input or --params")
+			}
+			var reader io.Reader
+			if *requestPath == "-" {
+				reader = os.Stdin
+			} else {
+				file, err := os.Open(*requestPath)
+				if err != nil {
+					return err
+				}
+				defer file.Close()
+				reader = file
+			}
+			b, err := io.ReadAll(io.LimitReader(reader, (32<<20)+1))
+			if err != nil {
+				return err
+			}
+			if len(b) > 32<<20 {
+				return errors.New("request exceeds 32 MiB")
+			}
+			if err := json.Unmarshal(b, &req); err != nil {
+				return fmt.Errorf("invalid start request: %w", err)
+			}
+		} else {
+			if *input == "" || len(*params) > 16<<10 {
+				return errors.New("--input is required and --params must be at most 16 KiB")
+			}
+			var legacy map[string]string
+			if err := json.Unmarshal([]byte(*params), &legacy); err != nil || legacy == nil {
+				return errors.New("--params must be a JSON object of string values")
+			}
+			req.Parameters = make(map[string]json.RawMessage, len(legacy))
+			for k, v := range legacy {
+				b, _ := json.Marshal(v)
+				req.Parameters[k] = b
+			}
+		}
+		commandArgs, err := t.FormatParameters(req.Parameters)
 		if err != nil {
+			return err
+		}
+		if err := t.ValidateEnvironment(req.Environment); err != nil {
 			return err
 		}
 		if *stage == "apply" {
@@ -167,10 +184,14 @@ func run(args []string) error {
 			return err
 		}
 		inputDst := filepath.Join(jobDir, *stage, "input.json")
-		if err := copyJSONExclusive(*input, inputDst); err != nil {
+		if *requestPath != "" {
+			if err := copyJSONReader(bytes.NewReader(req.Input), inputDst); err != nil {
+				return err
+			}
+		} else if err := copyJSONExclusive(*input, inputDst); err != nil {
 			return err
 		}
-		return startContainer(name, *id, *stage, *taskType, hostJobDir, t, commandArgs)
+		return startContainer(name, *id, *stage, *taskType, hostJobDir, t, commandArgs, req.Environment)
 	case "status":
 		state, err := inspect(name)
 		if err != nil {
@@ -254,6 +275,10 @@ func copyJSONExclusive(src, dst string) error {
 		defer f.Close()
 		input = f
 	}
+	return copyJSONReader(input, dst)
+}
+
+func copyJSONReader(input io.Reader, dst string) error {
 	b, err := io.ReadAll(io.LimitReader(input, (32<<20)+1))
 	if err != nil {
 		return err
@@ -275,54 +300,7 @@ func copyJSONExclusive(src, dst string) error {
 	return f.Sync()
 }
 
-func commandParameters(specs []TaskParameter, raw string) ([]string, error) {
-	if len(raw) > 16<<10 {
-		return nil, errors.New("params exceeds 16 KiB")
-	}
-	var values map[string]string
-	if err := json.Unmarshal([]byte(raw), &values); err != nil || values == nil {
-		return nil, errors.New("params must be a JSON object of string values")
-	}
-	seen := make(map[string]bool)
-	args := make([]string, 0, len(values))
-	for _, spec := range specs {
-		if !validID.MatchString(spec.Name) || !validFlag.MatchString(spec.Flag) || seen[spec.Name] {
-			return nil, fmt.Errorf("invalid or duplicate parameter configuration %q", spec.Name)
-		}
-		seen[spec.Name] = true
-		value, present := values[spec.Name]
-		if !present {
-			if spec.Required {
-				return nil, fmt.Errorf("missing required parameter %q", spec.Name)
-			}
-			continue
-		}
-		if len(value) == 0 || len(value) > 512 || strings.ContainsAny(value, "\x00\r\n") {
-			return nil, fmt.Errorf("invalid value for parameter %q", spec.Name)
-		}
-		if strings.HasPrefix(value, "networks/") && (filepath.Clean(value) != value || strings.Contains("/"+value+"/", "/../")) {
-			return nil, fmt.Errorf("invalid path for parameter %q", spec.Name)
-		}
-		if spec.Pattern != "" {
-			pattern, err := regexp.Compile("^(?:" + spec.Pattern + ")$")
-			if err != nil {
-				return nil, fmt.Errorf("invalid pattern for %q: %w", spec.Name, err)
-			}
-			if !pattern.MatchString(value) {
-				return nil, fmt.Errorf("value for %q does not match its pattern", spec.Name)
-			}
-		}
-		args = append(args, spec.Flag+"="+value)
-	}
-	for name := range values {
-		if !seen[name] {
-			return nil, fmt.Errorf("unknown parameter %q", name)
-		}
-	}
-	return args, nil
-}
-
-func containerArgs(name, id, stage, kind, hostJobDir string, t TaskType, commandArgs []string) ([]string, error) {
+func containerArgs(name, id, stage, kind, hostJobDir string, t jobconfig.TaskType, commandArgs []string, environment map[string]string) ([]string, error) {
 	stageDir := filepath.Join(hostJobDir, stage)
 	args := []string{"create", "--name", name,
 		"--label", "app=jobrunner", "--label", "job.id=" + id,
@@ -370,6 +348,14 @@ func containerArgs(name, id, stage, kind, hostJobDir string, t TaskType, command
 		}
 		args = append(args, "--env", key+"="+value)
 	}
+	names := make([]string, 0, len(environment))
+	for name := range environment {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		args = append(args, "--env", name)
+	}
 	args = append(args, t.Image)
 	if len(t.Command) == 0 {
 		if len(commandArgs) != 0 {
@@ -388,12 +374,12 @@ func containerArgs(name, id, stage, kind, hostJobDir string, t TaskType, command
 	return args, nil
 }
 
-func startContainer(name, id, stage, kind, hostJobDir string, t TaskType, commandArgs []string) error {
-	args, err := containerArgs(name, id, stage, kind, hostJobDir, t, commandArgs)
+func startContainer(name, id, stage, kind, hostJobDir string, t jobconfig.TaskType, commandArgs []string, environment map[string]string) error {
+	args, err := containerArgs(name, id, stage, kind, hostJobDir, t, commandArgs, environment)
 	if err != nil {
 		return err
 	}
-	idOut, err := docker(context.Background(), args...)
+	idOut, err := dockerWithEnv(context.Background(), environment, args...)
 	if err != nil {
 		return err
 	}
@@ -417,7 +403,17 @@ func inspect(name string) (ContainerState, error) {
 }
 
 func docker(ctx context.Context, args ...string) (string, error) {
+	return dockerWithEnv(ctx, nil, args...)
+}
+
+func dockerWithEnv(ctx context.Context, environment map[string]string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "docker", args...)
+	if len(environment) != 0 {
+		cmd.Env = os.Environ()
+		for name, value := range environment {
+			cmd.Env = append(cmd.Env, name+"="+value)
+		}
+	}
 	// docker CLI can be installed on the host; no shell is involved.
 	output, err := cmd.CombinedOutput()
 	if err != nil {

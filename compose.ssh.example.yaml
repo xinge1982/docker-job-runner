@@ -11,7 +11,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /srv/jobrunner/jobs:/jobrunner/jobs
       - /srv/jobrunner/config.json:/etc/jobrunner/config.json:ro
-      - /srv/jobrunner/worker.env:/etc/jobrunner/worker.env:ro
       - /srv/jobrunner/ssh/authorized_keys:/home/jobrunner/.ssh/authorized_keys:ro
       - /srv/jobrunner/ssh/hostkeys:/etc/jobrunner/hostkeys
     environment:
