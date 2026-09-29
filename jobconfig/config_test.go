@@ -2,9 +2,9 @@ package jobconfig
 
 import (
 	"encoding/json"
-	"reflect"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -52,10 +52,10 @@ func TestFormatParameters(t *testing.T) {
 		{Name: "kind", Flag: "--kind", Type: "string", AllowedValues: []string{"bridges"}},
 	}}
 	values := map[string]json.RawMessage{
-		"config": json.RawMessage(`"networks/config.yaml"`),
-		"count": json.RawMessage(`4`),
+		"config":  json.RawMessage(`"networks/config.yaml"`),
+		"count":   json.RawMessage(`4`),
 		"enabled": json.RawMessage(`true`),
-		"kind": json.RawMessage(`"bridges"`),
+		"kind":    json.RawMessage(`"bridges"`),
 	}
 	got, err := task.FormatParameters(values)
 	if err != nil {
