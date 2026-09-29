@@ -56,14 +56,29 @@ func NewJobID() (string, error) {
 }
 
 func (c Client) StartPreview(ctx context.Context, id, taskType string, params json.RawMessage) (string, error) {
-	return c.start(ctx, id, taskType, "preview", params)
+	return c.start(ctx, id, taskType, "preview", params, nil)
 }
 
 func (c Client) StartApply(ctx context.Context, id, taskType string, approved json.RawMessage) (string, error) {
-	return c.start(ctx, id, taskType, "apply", approved)
+	return c.start(ctx, id, taskType, "apply", approved, nil)
 }
 
-func (c Client) start(ctx context.Context, id, taskType, stage string, input json.RawMessage) (string, error) {
+// Command parameters are validated against the task type's configured allowlist.
+// They are separate from the JSON document mounted at /job/input.json.
+func (c Client) StartPreviewWithParams(ctx context.Context, id, taskType string, input json.RawMessage, params map[string]string) (string, error) {
+	return c.start(ctx, id, taskType, "preview", input, params)
+}
+
+func (c Client) StartApplyWithParams(ctx context.Context, id, taskType string, input json.RawMessage, params map[string]string) (string, error) {
+	return c.start(ctx, id, taskType, "apply", input, params)
+}
+
+// StartRunWithParams executes a direct task without a preview/apply workflow.
+func (c Client) StartRunWithParams(ctx context.Context, id, taskType string, input json.RawMessage, params map[string]string) (string, error) {
+	return c.start(ctx, id, taskType, "run", input, params)
+}
+
+func (c Client) start(ctx context.Context, id, taskType, stage string, input json.RawMessage, params map[string]string) (string, error) {
 	if !validID.MatchString(id) {
 		return "", errors.New("invalid job ID")
 	}
@@ -73,8 +88,15 @@ func (c Client) start(ctx context.Context, id, taskType, stage string, input jso
 	if len(input) > 32<<20 {
 		return "", errors.New("input exceeds 32 MiB")
 	}
+	if params == nil {
+		params = map[string]string{}
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		return "", err
+	}
 	out, err := c.callWithInput(ctx, input, "start", "--id", id, "--type", taskType,
-		"--stage", stage, "--input", "-")
+		"--stage", stage, "--input", "-", "--params", string(encoded))
 	if err != nil {
 		return "", err
 	}
@@ -149,7 +171,7 @@ func checkIDStage(id, stage string) error {
 	if !validID.MatchString(id) {
 		return errors.New("invalid job ID")
 	}
-	if stage != "preview" && stage != "apply" {
+	if stage != "preview" && stage != "apply" && stage != "run" {
 		return errors.New("invalid stage")
 	}
 	return nil

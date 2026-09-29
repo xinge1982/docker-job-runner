@@ -2,17 +2,132 @@
   "work_root": "/jobrunner/jobs",
   "host_work_root": "/srv/jobrunner/jobs",
   "tasks": {
-    "line_models": {
-      "image": "local/job-worker:demo",
-      "memory": "1g",
-      "cpus": "1.0",
-      "network": "none"
+    "tileset_build": {
+      "image": "alpine:3.14",
+      "memory": "8g",
+      "cpus": "4.0",
+      "network": "sign_default",
+      "work_dir": "/app",
+      "mounts": [
+        {
+          "source": "/srv/jobrunner/programs",
+          "target": "/app/programs",
+          "read_only": true
+        },
+        {
+          "source": "/srv/jobrunner/networks",
+          "target": "/app/networks",
+          "read_only": false
+        }
+      ],
+      "env_file": "/etc/jobrunner/worker.env",
+      "environment": {
+        "TZ": "Asia/Shanghai"
+      },
+      "command": [
+        "/app/programs/tileset-lod-tool",
+        "feature-tileset-build"
+      ],
+      "parameters": [
+        {
+          "name": "config",
+          "flag": "-c",
+          "required": true,
+          "pattern": "networks/[A-Za-z0-9_./-]+[.]yaml"
+        },
+        {
+          "name": "output_path",
+          "flag": "-output-path",
+          "required": true,
+          "pattern": "networks/[A-Za-z0-9_./-]+"
+        },
+        {
+          "name": "tileset_type",
+          "flag": "-tileset-type",
+          "required": true,
+          "pattern": "[A-Za-z0-9_-]+"
+        }
+      ],
+      "mode": "direct"
+    },
+    "feature_road_id": {
+      "image": "alpine:3.14",
+      "memory": "4g",
+      "cpus": "2.0",
+      "network": "sign_default",
+      "work_dir": "/app",
+      "mounts": [
+        {
+          "source": "/srv/jobrunner/programs",
+          "target": "/app/programs",
+          "read_only": true
+        },
+        {
+          "source": "/srv/jobrunner/networks",
+          "target": "/app/networks",
+          "read_only": false
+        }
+      ],
+      "env_file": "/etc/jobrunner/worker.env",
+      "environment": {
+        "TZ": "Asia/Shanghai"
+      },
+      "command": [
+        "/app/programs/map-tool",
+        "feature-road-id"
+      ],
+      "parameters": [
+        {
+          "name": "config",
+          "flag": "-c",
+          "required": true,
+          "pattern": "networks/[A-Za-z0-9_./-]+[.]yaml"
+        },
+        {
+          "name": "road_area_table",
+          "flag": "-road-area-table",
+          "required": true,
+          "pattern": "[A-Za-z_][A-Za-z0-9_]*"
+        },
+        {
+          "name": "feature_table",
+          "flag": "-feature-table",
+          "required": true,
+          "pattern": "[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ],
+      "mode": "direct"
     },
     "missing_poles": {
-      "image": "local/job-worker:demo",
-      "memory": "1g",
+      "image": "python:3.11-alpine",
+      "memory": "2g",
       "cpus": "1.0",
-      "network": "none"
+      "network": "sign_default",
+      "work_dir": "/app",
+      "mounts": [
+        {
+          "source": "/srv/jobrunner/programs",
+          "target": "/app/programs",
+          "read_only": true
+        },
+        {
+          "source": "/srv/jobrunner/networks",
+          "target": "/app/networks",
+          "read_only": false
+        }
+      ],
+      "env_file": "/etc/jobrunner/worker.env",
+      "environment": {
+        "TZ": "Asia/Shanghai"
+      },
+      "command": [
+        "python",
+        "/app/programs/scripts/missing_poles.py",
+        "--input=/job/input.json",
+        "--output=/job/output/result.json"
+      ],
+      "parameters": [],
+      "mode": "direct"
     }
   }
 }

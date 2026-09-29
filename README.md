@@ -1,6 +1,6 @@
 # Docker task runner (Linux host prototype)
 
-This is a host-side Go CLI for examining the two-container `preview` / `apply`
+This is a Go CLI for direct tasks and the two-container `preview` / `apply`
 workflow. It invokes the Docker CLI using an argument array (never a shell),
 and requires Docker CLI access to the local daemon. It uses only Go's standard
 library. The included Python image **does not write to the business database**:
@@ -11,7 +11,7 @@ library. The included Python image **does not write to the business database**:
 ```bash
 cd docker-job-runner
 docker build -t local/job-worker:demo ./example-worker
-cp config.example.json config.json
+cp config.demo.example.json config.json
 # Work directories default to ./jobs; the runner resolves this to a host path.
 go build -o jobrunner .
 ./jobrunner start  --config config.json --id example001 --type line_models --stage preview --input preview.example.json
@@ -45,13 +45,84 @@ The container runs with the UID and GID of the host user invoking `jobrunner`
 so it can write its output directory. Run this example as a dedicated non-root
 user with Docker access.
 
-The image must provide an `ENTRYPOINT` accepting `--stage`, `--input` and
-`--output`, and write `/job/output/result.json`. Existing Python scripts or Go
-executables can be wrapped by a small adapter like `worker.py`. Set the fixed
-image, memory, CPU, and network in `config.json`; callers cannot choose arbitrary
-images or shell commands. Use a specific network instead of `none` when a worker
-must reach PostgreSQL or MinIO. For a host-side runner, `work_root` resolves to
-a host path and `host_work_root` can be omitted.
+For staged tasks without a configured `command`, the image must provide an
+`ENTRYPOINT` accepting `--stage`, `--input` and `--output`, and write
+`/job/output/result.json`. Existing scripts can use a small adapter like
+`worker.py`. The `config.demo.example.json` file preserves this workflow.
+The fixed image, memory, CPU, network, mounts, and command come from the task
+configuration. For a host-side runner, `work_root` resolves to a host path and
+`host_work_root` can be omitted.
+
+## Run existing binaries or Python scripts in standard images
+
+`config.example.json` runs on the host. `config.in-container.example.json`
+runs in the SSH jobrunner container. Both configure `tileset_build` and
+`feature_road_id` with `alpine:3.14`, and a replaceable `missing_poles`
+example with `python:3.11-alpine`. These tasks use `mode: "direct"` and
+`--stage run`: they execute once without the preview/apply gate. The Python
+script path and flags are placeholders; adapt them to your existing program.
+For a real preview/apply task, use `mode: "staged"` and implement the result
+contract before enabling the apply step.
+
+Place executable binaries under `/srv/jobrunner/programs` on the Docker host
+and make them executable there. Alpine requires binaries compatible with musl
+or statically linked binaries. Put network data under
+`/srv/jobrunner/networks`. Edit the host-side paths in `mounts[*].source` for
+your installation. Each `target` and `work_dir` is a path *inside the task
+container*. `/job/input.json` holds the submitted JSON and `/job/output` is
+the stage's writable output directory. Configure a job result writer to create
+`/job/output/result.json` if you want to use the `result` command; `status`,
+`wait`, and `logs` work without that file. The two Go examples write their
+business files in the configured `networks` mount.
+
+Create a private environment file visible to the runner. Use
+`/srv/jobrunner/worker.env` for the host CLI, or mount that file into the SSH
+runner at `/etc/jobrunner/worker.env` as shown in
+`compose.ssh.example.yaml`. Add your actual database and storage variables
+there, one `NAME=value` entry per line; do not commit this file. Keep
+`config.json` private when it contains deployment-specific paths. The Docker
+CLI reads `env_file` from the runner filesystem. Docker Engine resolves
+`mounts[*].source` on the *host*, including when the CLI runs inside the SSH
+runner container. The jobrunner container does not need the programs or network
+data mounted into itself.
+
+Submit the program's command flags with `--params` as a JSON object. Each
+accepted name, target flag, required value, and optional regular expression
+is declared under `parameters` in the task configuration. The runner appends
+each `-flag=value` as a separate process argument, without a shell. Unknown
+names, missing required parameters, and values that fail their pattern are
+rejected. The separate `--input` JSON file remains available to the program
+at `/job/input.json`.
+
+```bash
+cp config.example.json config.json
+printf 'POSTGRES_HOST=postgres\nPOSTGRES_PORT=5432\nPOSTGRES_USER=postgres\n' > /srv/jobrunner/worker.env
+chmod 0600 /srv/jobrunner/worker.env
+printf '{}\n' > run.example.json
+./jobrunner start --config config.json --id bridges001 --type tileset_build --stage run \
+  --input run.example.json \
+  --params '{"config":"networks/config_jiangsu_1031.yaml","output_path":"networks/network_jiangsu_1031/tilesets/bridges","tileset_type":"bridges"}'
+./jobrunner status --config config.json --id bridges001 --stage run
+./jobrunner logs --config config.json --id bridges001 --stage run
+./jobrunner wait --config config.json --id bridges001 --stage run
+```
+
+Add the remaining required database and storage settings to the environment
+file locally. Make sure the Docker network `sign_default` exists. The runner
+does not create it. Run jobrunner under an account that can read the environment
+file and use Docker. A direct task can also be submitted through the Go client:
+
+```go
+containerID, err := runner.StartRunWithParams(ctx, id, "feature_road_id",
+    json.RawMessage(`{}`), map[string]string{
+        "config": "networks/config_jiangsu_2026.yaml",
+        "road_area_table": "hdroad_area0924",
+        "feature_table": "hdtraffic_ene",
+    })
+_ = containerID
+if err != nil { return err }
+status, err := runner.GetStatus(ctx, id, "run")
+```
 
 ## Run this CLI inside the main service container
 
@@ -191,7 +262,12 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o jobrunner .
 install -d -m 0700 /srv/jobrunner/ssh/hostkeys
 install -d -m 0700 /srv/jobrunner/ssh
 install -d -o 10001 -g 10001 -m 0700 /srv/jobrunner/jobs
+install -d -m 0755 /srv/jobrunner/programs /srv/jobrunner/networks
 cp config.in-container.example.json /srv/jobrunner/config.json
+# Add the required variables locally and let the jobrunner user read this file.
+touch /srv/jobrunner/worker.env
+chown 10001:10001 /srv/jobrunner/worker.env
+chmod 0600 /srv/jobrunner/worker.env
 # Put only trusted clients' SSH public keys into this file.
 touch /srv/jobrunner/ssh/authorized_keys
 chmod 0644 /srv/jobrunner/ssh/authorized_keys
@@ -224,6 +300,9 @@ and port 22; it needs an SSH client, its own private key, and a trusted
 
 `work_root` is `/jobrunner/jobs` inside the runner container, while
 `host_work_root` is `/srv/jobrunner/jobs` for the Docker daemon's bind mounts.
+`mounts[*].source` in the task configuration also refers to paths on the
+Docker host. `env_file` instead refers to `/etc/jobrunner/worker.env` inside
+the runner container; Compose mounts the host environment file there.
 The SSH login user has UID 10001; the entrypoint adds it to the socket's
 numeric group before starting sshd. Access to the Docker socket grants broad
 control over the host, so this container and its SSH keys should be treated as
