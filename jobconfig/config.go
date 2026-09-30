@@ -21,6 +21,7 @@ type Config struct {
 }
 
 type TaskType struct {
+	Schema
 	Image   string   `json:"image"`
 	Memory  string   `json:"memory"`
 	CPUs    string   `json:"cpus"`
@@ -151,7 +152,11 @@ func Load(filename string) (Config, error) {
 		}
 	}
 	override("work_root", &c.WorkRoot)
-	override("host_work_root", &c.HostWorkRoot)
+	hostRoot, err := expandConfigEnv(c.HostWorkRoot)
+	if err != nil {
+		return Config{}, err
+	}
+	c.HostWorkRoot = hostRoot
 	for name, task := range c.Tasks {
 		prefix := "tasks." + name + "."
 		override(prefix+"image", &task.Image)

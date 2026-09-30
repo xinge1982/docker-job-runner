@@ -1,35 +1,7 @@
 {
   "work_root": "/jobrunner/jobs",
-  "host_work_root": "/srv/jobrunner/jobs",
+  "host_work_root": "${HOST_JOBRUNNER_ROOT}/jobs",
   "tasks": {
-    "tileset_build": {
-      "image": "alpine:3.14",
-      "memory": "8g",
-      "cpus": "4.0",
-      "network": "sign_default",
-      "work_dir": "/app",
-      "mounts": [
-        {
-          "source": "/srv/jobrunner/programs",
-          "target": "/app/programs",
-          "read_only": true
-        },
-        {
-          "source": "/srv/jobrunner/networks",
-          "target": "/app/networks",
-          "read_only": false
-        }
-      ],
-      "environment": {
-        "TZ": "Asia/Shanghai"
-      },
-      "command": [
-        "/app/programs/tileset-lod-tool",
-        "feature-tileset-build"
-      ],
-      "mode": "direct",
-      "schema_argument": "--jobrunner-schema"
-    },
     "feature_road_id": {
       "image": "alpine:3.14",
       "memory": "4g",
@@ -38,12 +10,12 @@
       "work_dir": "/app",
       "mounts": [
         {
-          "source": "/srv/jobrunner/programs",
+          "source": "${HOST_JOBRUNNER_ROOT}/programs",
           "target": "/app/programs",
           "read_only": true
         },
         {
-          "source": "/srv/jobrunner/networks",
+          "source": "${HOST_JOBRUNNER_ROOT}/networks",
           "target": "/app/networks",
           "read_only": false
         }
@@ -54,36 +26,6 @@
       "command": [
         "/app/programs/map-tool",
         "feature-road-id"
-      ],
-      "mode": "direct",
-      "schema_argument": "--jobrunner-schema"
-    },
-    "missing_poles": {
-      "image": "python:3.11-alpine",
-      "memory": "2g",
-      "cpus": "1.0",
-      "network": "sign_default",
-      "work_dir": "/app",
-      "mounts": [
-        {
-          "source": "/srv/jobrunner/programs",
-          "target": "/app/programs",
-          "read_only": true
-        },
-        {
-          "source": "/srv/jobrunner/networks",
-          "target": "/app/networks",
-          "read_only": false
-        }
-      ],
-      "environment": {
-        "TZ": "Asia/Shanghai"
-      },
-      "command": [
-        "python",
-        "/app/programs/scripts/missing_poles.py",
-        "--input=/job/input.json",
-        "--output=/job/output/result.json"
       ],
       "mode": "direct",
       "schema_argument": "--jobrunner-schema"
