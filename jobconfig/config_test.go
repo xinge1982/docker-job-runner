@@ -77,6 +77,24 @@ func TestFormatParameters(t *testing.T) {
 	}
 }
 
+func TestUploadedFilePathParameter(t *testing.T) {
+	task, err := (TaskType{}).WithSchema(Schema{Version: 1, Parameters: []TaskParameter{{
+		Name: "geojson", Flag: "--geojson", Type: "path", Required: true, PathPrefix: "/job/files/",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := task.FormatParameters(map[string]json.RawMessage{"geojson": json.RawMessage(`"/job/files/roads.geojson"`)})
+	if err != nil || !reflect.DeepEqual(got, []string{"--geojson=/job/files/roads.geojson"}) {
+		t.Fatalf("format uploaded file path: %v, %v", got, err)
+	}
+	for _, invalid := range []string{`"/job/files/../secret"`, `"/etc/passwd"`} {
+		if _, err := task.FormatParameters(map[string]json.RawMessage{"geojson": json.RawMessage(invalid)}); err == nil {
+			t.Fatalf("accepted invalid upload path %s", invalid)
+		}
+	}
+}
+
 func TestValidateEnvironment(t *testing.T) {
 	task := TaskType{EnvironmentVariables: []EnvironmentVar{
 		{Name: "POSTGRES_HOST", Required: true},

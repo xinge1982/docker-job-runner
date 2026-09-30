@@ -55,6 +55,93 @@ configuration. For a host-side runner, `work_root` resolves to a host path and
 
 ## Run existing binaries or Python scripts in standard images
 
+### Large input files and job archives
+
+Keep large GeoJSON files out of the 32 MiB start-request JSON. Upload each
+file before starting the stage. The upload is streamed through SSH stdin to
+`<work_root>/<job-id>/files/`; it is published only after the exact size and
+optional SHA-256 digest match. Names are simple file names, not paths. A
+published file cannot be overwritten. The task container sees the shared
+files directory read-only at `/job/files/` for preview, apply, and direct runs.
+
+```bash
+size=$(wc -c < roads.geojson)
+digest=$(sha256sum roads.geojson | cut -d ' ' -f 1)
+jobrunner upload --config config.json --id roads001 \
+  --file-name roads.geojson --size "$size" --sha256 "$digest" < roads.geojson
+jobrunner archive --config config.json --id roads001 > roads001.tar.gz
+```
+
+For a remote SSH runner, pipe the file to the same commands over SSH. The
+`archive` command streams a gzip-compressed tar of the entire instance
+directory to stdout. It tries to save Docker logs to each stage's `logs/`
+directory before packaging. A running stage can still change files while
+archiving, so download after completion for a consistent copy. The archive
+rejects symlinks and special files. Uploads are limited to 8 GiB per file;
+archives are limited to 16 GiB of uncompressed regular files.
+
+The Go client offers the same operations for local and SSH deployments:
+
+```go
+file, err := os.Open("roads.geojson")
+if err != nil { return err }
+defer file.Close()
+info, err := file.Stat()
+if err != nil { return err }
+uploaded, err := runner.UploadFile(ctx, id, "roads.geojson", info.Size(), "", file)
+if err != nil { return err }
+// Pass uploaded.Path as a validated job parameter or in the small input JSON.
+_ = uploaded.Path // /job/files/roads.geojson
+
+archive, err := os.Create("roads001.tar.gz")
+if err != nil { return err }
+defer archive.Close()
+if err := runner.DownloadArchive(ctx, id, archive); err != nil { return err }
+```
+
+Supply the expected SHA-256 hex string in the fifth `UploadFile` argument
+when it is available. Both methods stream through `io.Reader` / `io.Writer`
+and use the caller's context; set a suitable deadline for large transfers.
+If an archive download fails, discard the partial output file. Authorize
+the job ID against its owner in the main application's HTTP handlers before
+calling these methods.
+
+### Retain and clean up completed jobs
+
+Jobrunner does not automatically remove stopped containers or job directories.
+List instances with at least one retained stage container whose existing
+stages have all exited, then explicitly delete one instance when your main
+application has finished retaining its data:
+
+```bash
+jobrunner list-completed --config config.json
+jobrunner archive --config config.json --id roads001 > roads001.tar.gz
+jobrunner delete --config config.json --id roads001
+```
+
+`list-completed` returns a JSON array of `job_id` and `stages` with Docker
+states and exit codes. A failed stage with a nonzero exit code is still a
+completed instance. A finished `preview` can appear before the user starts
+`apply`; the main application's database determines when the entire business
+workflow is ready for cleanup. An upload-only directory has no container, so
+it is not included in this list, but can still be deleted by ID.
+
+`delete` checks all existing preview, apply and run containers for the ID,
+refuses running stages, verifies their jobrunner labels, removes the stopped
+containers, then removes the instance directory. A failed removal preserves
+the directory and can be retried. Archive before deleting if logs and files
+need to be retained. Jobrunner does not control Docker's external pruning;
+exclude retained job containers from any host-level cleanup policy.
+
+```go
+completed, err := runner.ListCompleted(ctx)
+if err != nil { return err }
+_ = completed // Reconcile with job ownership and workflow state in your DB.
+// After preserving the archive, and only when the application requests cleanup:
+if err := runner.DeleteJob(ctx, id); err != nil { return err }
+```
+
+
 ### Environment-based runner configuration
 
 `jobconfig.Load` reads JSON through Viper. Set `JOBRUNNER_`-prefixed
@@ -105,6 +192,11 @@ configured program supports the schema protocol below. The runner then reads
 `config.json`. A task without `schema_argument` keeps the previous static
 declarations for compatibility. When discovery is enabled, its output is
 authoritative.
+
+An uploaded file parameter can declare `"type":"path"` and
+`"path_prefix":"/job/files/"`. The runner validates the submitted path
+before passing it to the configured command. Other absolute path prefixes
+remain unsupported.
 
 Each parameter declares `name`, target `flag`, and `type` (`string`,
 `path`, `integer`, `number`, or `boolean`), plus `required` and optional

@@ -90,7 +90,7 @@ func (t TaskType) WithSchema(schema Schema) (TaskType, error) {
 			return TaskType{}, fmt.Errorf("invalid parameter type %q", spec.Type)
 		}
 		if spec.Type == "path" && (!strings.HasSuffix(spec.PathPrefix, "/") ||
-			path.IsAbs(spec.PathPrefix) ||
+			(path.IsAbs(spec.PathPrefix) && spec.PathPrefix != "/job/files/") ||
 			path.Clean(spec.PathPrefix) != strings.TrimSuffix(spec.PathPrefix, "/") ||
 			strings.Contains("/"+spec.PathPrefix, "/../")) {
 			return TaskType{}, fmt.Errorf("invalid path prefix for %q", spec.Name)
