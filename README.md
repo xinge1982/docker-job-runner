@@ -633,3 +633,118 @@ If the private key has a passphrase, add it to your SSH agent with `ssh-add`
 before debugging. Give the production main program its own key and
 `known_hosts` entry. Configure the destination and port per environment;
 the Go job workflow stays the same.
+
+## Production main application SSH credentials
+
+Give the production main application its own SSH key, separate from the Windows
+development key. Install its public key in the jobrunner container's
+`authorized_keys`; keep the private key on the production application host.
+`jobrunnerclient` invokes the system `ssh` command and reads that user's SSH
+configuration. It does not load a public key as a client credential.
+
+### Prepare the key and SSH configuration
+
+On the production application host, create a dedicated directory and key:
+
+```bash
+install -d -m 0700 /data/sign/main-ssh
+# Run only when this key does not already exist.
+ssh-keygen -t ed25519 -N '' \
+  -f /data/sign/main-ssh/jobrunner_ed25519 -C jobrunner-production
+```
+
+This example uses a key without a passphrase for unattended operation. If you
+use a passphrase, provide an SSH agent with the key unlocked and make its socket
+available to the application. Never commit the private key or copy it into an image.
+
+Through an existing trusted connection to the jobrunner host, append the contents
+of `jobrunner_ed25519.pub` as one line to the host file mounted as the runner's
+`authorized_keys`. The repository's Compose example uses
+`/srv/jobrunner/ssh/authorized_keys`; use your actual deployment path.
+
+Create `/data/sign/main-ssh/config`:
+
+```sshconfig
+Host jobrunner-prod
+    HostName YOUR_JOBRUNNER_HOST
+    User jobrunner
+    Port 2222
+    IdentityFile ~/.ssh/jobrunner_ed25519
+    IdentitiesOnly yes
+    BatchMode yes
+    StrictHostKeyChecking yes
+```
+
+Replace `YOUR_JOBRUNNER_HOST` with an address reachable from the main container.
+If both containers share a Compose network, use the jobrunner service name and
+its internal SSH port 22 instead of the published host port 2222.
+
+### Verify the server host key
+
+Obtain the jobrunner host key fingerprint through the trusted Linux host
+connection, as described in the Windows setup section. On the production
+application host, collect a candidate host key:
+
+```bash
+ssh-keyscan -t ed25519 -p 2222 YOUR_JOBRUNNER_HOST \
+  > /data/sign/main-ssh/known_hosts.candidate
+ssh-keygen -lf /data/sign/main-ssh/known_hosts.candidate
+```
+
+`ssh-keyscan` does not authenticate the server. Compare its fingerprint with
+the trusted fingerprint. Only after they match, rename the candidate file to
+`/data/sign/main-ssh/known_hosts`. Use the same hostname and port as the SSH
+configuration; an internal service name on port 22 requires its own matching entry.
+
+### Mount credentials into the main container
+
+Assuming the main application user has home directory `/home/app`, add this
+mount to its existing Compose service:
+
+```yaml
+services:
+  main:
+    volumes:
+      - /data/sign/main-ssh:/home/app/.ssh:ro
+```
+
+Replace `/home/app` with the actual home directory of the user running the
+application. For a root process this is usually `/root`. Set ownership to the
+main container user's numeric UID and GID, and restrict file permissions:
+
+```bash
+# Replace 10001:10001 with the main application's actual UID:GID.
+chown -R 10001:10001 /data/sign/main-ssh
+chmod 700 /data/sign/main-ssh
+chmod 600 /data/sign/main-ssh/config \
+  /data/sign/main-ssh/jobrunner_ed25519 \
+  /data/sign/main-ssh/known_hosts
+```
+
+The main image must include an OpenSSH client. For an Alpine-based image, add
+`RUN apk add --no-cache openssh-client` to its Dockerfile. The main container
+needs no Docker socket for SSH-backed jobrunner calls.
+
+### Configure and verify the Go client
+
+```go
+runner := jobrunnerclient.Client{
+    Binary:  "/usr/local/bin/jobrunner",
+    Config:  "/etc/jobrunner/config.json", // Path inside the remote runner.
+    Remote:  "jobrunner-prod",
+    SSHPort: 2222, // Use 22 with the internal Compose service endpoint.
+}
+```
+
+The client passes `SSHPort` explicitly, so keep it consistent with the endpoint.
+Test from the main container as the same user that runs the application:
+
+```bash
+docker compose exec main ssh -T jobrunner-prod "id"
+docker compose exec main ssh -T jobrunner-prod \
+  "jobrunner describe --config /etc/jobrunner/config.json --type feature_road_id"
+```
+
+If the main application runs directly on a Linux host, place the SSH files in
+the service user's `~/.ssh` directory instead of mounting them into a container.
+The Go client configuration remains the same.
