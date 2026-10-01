@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/xinge1982/docker-job-runner/jobconfig"
+	"github.com/xinge1982/docker-job-runner/jobprogress"
 )
 
 type Client struct {
@@ -40,12 +41,17 @@ type ContainerState struct {
 	FinishedAt string `json:"FinishedAt"`
 }
 
+// Progress is the shared worker progress contract. Percent may be nil.
+type Progress = jobprogress.Progress
+
 type Status struct {
-	JobID       string         `json:"job_id"`
-	Stage       string         `json:"stage"`
-	ContainerID string         `json:"container_id"`
-	State       ContainerState `json:"container_state"`
-	Output      string         `json:"output"`
+	Progress      *Progress      `json:"progress,omitempty"`
+	ProgressError string         `json:"progress_error,omitempty"`
+	JobID         string         `json:"job_id"`
+	Stage         string         `json:"stage"`
+	ContainerID   string         `json:"container_id"`
+	State         ContainerState `json:"container_state"`
+	Output        string         `json:"output"`
 }
 
 // CompletedJob reports retained stage containers for an instance whose

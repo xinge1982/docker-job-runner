@@ -152,6 +152,7 @@ func Load(filename string) (Config, error) {
 		}
 	}
 	override("work_root", &c.WorkRoot)
+	override("host_work_root", &c.HostWorkRoot)
 	hostRoot, err := expandConfigEnv(c.HostWorkRoot)
 	if err != nil {
 		return Config{}, err

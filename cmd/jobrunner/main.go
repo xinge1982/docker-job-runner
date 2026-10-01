@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/xinge1982/docker-job-runner/jobconfig"
+	"github.com/xinge1982/docker-job-runner/jobprogress"
 )
 
 type ContainerState struct {
@@ -30,11 +31,13 @@ type ContainerState struct {
 	FinishedAt string `json:"FinishedAt"`
 }
 type Result struct {
-	JobID       string          `json:"job_id"`
-	Stage       string          `json:"stage"`
-	ContainerID string          `json:"container_id,omitempty"`
-	State       *ContainerState `json:"container_state,omitempty"`
-	Output      string          `json:"output,omitempty"`
+	Progress      *jobprogress.Progress `json:"progress,omitempty"`
+	ProgressError string                `json:"progress_error,omitempty"`
+	JobID         string                `json:"job_id"`
+	Stage         string                `json:"stage"`
+	ContainerID   string                `json:"container_id,omitempty"`
+	State         *ContainerState       `json:"container_state,omitempty"`
+	Output        string                `json:"output,omitempty"`
 }
 
 var validID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
@@ -237,6 +240,12 @@ func run(args []string) error {
 		}
 		result := Result{JobID: *id, Stage: *stage, ContainerID: strings.TrimSpace(out), State: &state,
 			Output: filepath.Join(jobDir, *stage, "output")}
+		progress, progressErr := readProgress(name)
+		if progressErr != nil {
+			// Keep status available and avoid exposing arbitrary worker log text.
+			result.ProgressError = "container progress logs unavailable or timed out"
+		}
+		result.Progress = jobprogress.ForState(progress, state.Status, state.Running, state.ExitCode, state.FinishedAt)
 		return json.NewEncoder(os.Stdout).Encode(result)
 	case "result":
 		if *maxBytes <= 0 || *maxBytes > 64<<20 {

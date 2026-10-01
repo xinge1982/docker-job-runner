@@ -5,6 +5,12 @@ import sys
 from pathlib import Path
 
 
+def progress(percent, phase, message):
+    print("JOBRUNNER_PROGRESS " + json.dumps({
+        "version": 1, "percent": percent, "phase": phase, "message": message,
+    }), flush=True)
+
+
 def main():
     if sys.argv[1:] == ["--jobrunner-schema"]:
         print(json.dumps({
@@ -18,9 +24,11 @@ def main():
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
+    progress(0, "prepare", "Reading input")
     payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
     output_dir = Path(args.output)
 
+    progress(10, "process", "Preparing candidates")
     if args.stage == "preview":
         candidates = payload.get("candidates", [])
         if not isinstance(candidates, list) or any(not isinstance(c, dict) or not isinstance(c.get("id"), str) for c in candidates):
@@ -46,9 +54,9 @@ def main():
                   "items": [{"id": candidate_id, "status": "demo_only"} for candidate_id in approved],
                   "count": len(approved)}
 
+    progress(90, "save", "Saving result")
     (output_dir / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"event": "progress", "stage": args.stage, "done": result["count"],
-                      "total": result["count"]}, ensure_ascii=False), flush=True)
+    progress(100, "done", "Completed")
 
 
 if __name__ == "__main__":

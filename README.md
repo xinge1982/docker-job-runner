@@ -748,3 +748,82 @@ docker compose exec main ssh -T jobrunner-prod \
 If the main application runs directly on a Linux host, place the SSH files in
 the service user's `~/.ssh` directory instead of mounting them into a container.
 The Go client configuration remains the same.
+
+## Worker progress percentages
+
+Workers may emit one complete JSON line on stdout or stderr with this exact
+prefix. Flush each line (Python: `flush=True`) and avoid concurrent writers
+splitting a progress line. Emit about once per second or each percentage change:
+
+```text
+JOBRUNNER_PROGRESS {"version":1,"percent":45,"phase":"process","completed":450,"total":1000,"message":"Processing features"}
+```
+
+`percent` is the overall percentage in the range 0 through 100, including
+fractional values. `completed` and `total` are optional nonnegative integer
+counts for the current phase; completed must not exceed total. Omit `percent`
+when work cannot be estimated and supply `phase` or `message` instead. Use
+stage weights in the worker to calculate overall progress. Preview and apply
+are separate stages and each starts its own progress sequence. Do not include
+credentials in progress messages or ordinary logs.
+
+A Go worker can reuse the exported contract:
+
+```go
+import (
+    "encoding/json"
+    "fmt"
+
+    "github.com/xinge1982/docker-job-runner/jobprogress"
+)
+
+func reportProgress(percent float64, phase, message string) error {
+    b, err := json.Marshal(jobprogress.Progress{
+        Version: 1,
+        Percent: &percent,
+        Phase: phase,
+        Message: message,
+    })
+    if err != nil { return err }
+    _, err = fmt.Printf("%s%s\n", jobprogress.Prefix, b)
+    return err
+}
+```
+
+The existing `status` command and `runner.GetStatus(ctx, id, stage)` now return
+an optional `progress` object. The Go type is `*jobrunnerclient.Progress`:
+
+```go
+status, err := runner.GetStatus(ctx, id, "run")
+if err != nil { return err }
+if status.Progress != nil && status.Progress.Percent != nil {
+    fmt.Printf("%.1f%% %s\n", *status.Progress.Percent, status.Progress.Message)
+}
+// status.ProgressError reports unavailable logs without failing state queries.
+```
+
+Each status query streams the full retained `docker logs --timestamps` output
+with a 30-second log-read timeout, bounded memory, and a 64 KiB line limit.
+Ordinary logs, malformed JSON, unsupported versions, and invalid values are
+ignored. The latest valid Docker timestamp wins, even when stdout and stderr
+arrive out of order. `updated_at` comes from Docker rather than the worker.
+There is no fixed tail limit, so ordinary log output after a progress message
+cannot hide it. This initial implementation does not cache progress or run a
+background watcher: query cost grows with retained log size. For very large
+logs, poll less frequently; incremental collection can be added later.
+Docker log rotation can remove old progress messages, so periodically repeat
+current progress during long phases. A logging driver must support reading logs.
+
+A successful exited container (exit code zero) is normalized to 100 percent,
+including workers without progress output. Running legacy workers omit progress.
+Failures retain the last reported value, and a worker's 100 percent never changes
+the container state. Always check `container_state` and validate business results.
+On log-read failure, `progress_error` is set; available partial progress may still
+be returned. Keep status responses in the main application's history if desired.
+The existing archive includes progress lines in each stage's logs/docker.log.
+
+Rebuild and redeploy the runner binary/container and update the main program's
+module dependency to consume the added fields. No config.json change is required.
+The main HTTP layer should explicitly expose these fields if it constructs its
+own response rather than returning the complete Status value. Poll about every
+2-3 seconds and stop after the container reaches a terminal state.
