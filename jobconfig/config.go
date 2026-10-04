@@ -122,6 +122,17 @@ type StartRequest struct {
 	Environment map[string]string          `json:"environment,omitempty"`
 }
 
+// StartResult identifies the retained job container and, when runner debug is
+// enabled, includes Docker commands with environment values redacted.
+type StartResult struct {
+	JobID          string   `json:"job_id"`
+	Stage          string   `json:"stage"`
+	ContainerID    string   `json:"container_id"`
+	ContainerName  string   `json:"container_name"`
+	DockerCommands []string `json:"docker_commands,omitempty"`
+	StartedAt      string   `json:"started_at,omitempty"`
+}
+
 var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 var validFlag = regexp.MustCompile(`^-{1,2}[A-Za-z][A-Za-z0-9-]*$`)
 var validEnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)

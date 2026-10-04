@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -73,5 +76,33 @@ func TestDebugDockerCommandWritesToProvidedWriter(t *testing.T) {
 	debugDockerCommand(&output, []string{"start", "job-test-run"})
 	if got, want := output.String(), "debug: docker command: docker start job-test-run\n"; got != want {
 		t.Fatalf("got %q; want %q", got, want)
+	}
+}
+
+func TestWriteStartRecordContainsOnlyRedactedCommands(t *testing.T) {
+	stageDir := t.TempDir()
+	result := jobconfig.StartResult{
+		JobID:         "test",
+		Stage:         "run",
+		ContainerID:   "container-id",
+		ContainerName: "job-test-run",
+		DockerCommands: []string{
+			"docker create --env PASSWORD=<redacted> alpine:3.14",
+			"docker start job-test-run",
+		},
+	}
+	if err := writeStartRecord(stageDir, result); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(stageDir, "start.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored jobconfig.StartResult
+	if err := json.Unmarshal(contents, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.ContainerName != result.ContainerName || strings.Contains(string(contents), "private-secret") {
+		t.Fatalf("unexpected start record: %s", contents)
 	}
 }

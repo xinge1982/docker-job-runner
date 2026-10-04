@@ -34,6 +34,14 @@ container's stdout and stderr. `stop` sends a graceful stop request:
 ./jobrunner stop --config config.json --id example001 --stage preview
 ```
 
+Use `--response-format json` when a caller needs structured startup metadata.
+The response contains the job ID, stage, container ID, deterministic container
+name, start time, and—when runner debug is enabled—the redacted Docker `create`
+and `start` commands. The same metadata is saved as
+`<work_root>/<job-id>/<stage>/start.json` and is included in job archives.
+The Go client exposes `StartRunRequestDetailed`,
+`StartPreviewRequestDetailed`, and `StartApplyRequestDetailed` for this form.
+
 Each stage has its own container named `job-<id>-<stage>`. The input file is
 copied into the job directory once, then mounted read-only at `/job/input.json`.
 The writable output directory is mounted at `/job/output`. The `apply` container

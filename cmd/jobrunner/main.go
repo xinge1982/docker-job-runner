@@ -36,6 +36,7 @@ type Result struct {
 	JobID         string                `json:"job_id"`
 	Stage         string                `json:"stage"`
 	ContainerID   string                `json:"container_id,omitempty"`
+	ContainerName string                `json:"container_name,omitempty"`
 	State         *ContainerState       `json:"container_state,omitempty"`
 	Output        string                `json:"output,omitempty"`
 }
@@ -63,6 +64,7 @@ func run(args []string) error {
 	input := f.String("input", "", "input JSON (preview) or approved JSON (apply)")
 	params := f.String("params", "{}", "JSON object with configured command parameters (start only)")
 	requestPath := f.String("request", "", "start request JSON (use - for stdin, keeps environment values out of argv)")
+	responseFormat := f.String("response-format", "text", "start response format: text or json")
 	tail := f.Int("tail", 200, "number of recent log lines")
 	maxBytes := f.Int64("max-bytes", 32<<20, "maximum result.json size")
 	fileName := f.String("file-name", "", "uploaded file name (upload only)")
@@ -79,6 +81,9 @@ func run(args []string) error {
 	}
 	if *tail < 0 || *tail > 10000 {
 		return errors.New("tail must be between 0 and 10000")
+	}
+	if *responseFormat != "text" && *responseFormat != "json" {
+		return errors.New("response-format must be text or json")
 	}
 	cfg, err := jobconfig.Load(*configPath)
 	if err != nil {
@@ -228,7 +233,15 @@ func run(args []string) error {
 		} else if err := copyJSONExclusive(*input, inputDst); err != nil {
 			return err
 		}
-		return startContainer(name, *id, *stage, *taskType, hostJobDir, t, commandArgs, req.Environment, cfg.Debug)
+		result, err := startContainer(name, *id, *stage, *taskType, jobDir, hostJobDir, t, commandArgs, req.Environment, cfg.Debug)
+		if err != nil {
+			return err
+		}
+		if *responseFormat == "json" {
+			return json.NewEncoder(os.Stdout).Encode(result)
+		}
+		fmt.Printf("job_id=%s stage=%s container_id=%s container_name=%s\n", result.JobID, result.Stage, result.ContainerID, result.ContainerName)
+		return nil
 	case "status":
 		state, err := inspect(name)
 		if err != nil {
@@ -238,7 +251,7 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		result := Result{JobID: *id, Stage: *stage, ContainerID: strings.TrimSpace(out), State: &state,
+		result := Result{JobID: *id, Stage: *stage, ContainerID: strings.TrimSpace(out), ContainerName: name, State: &state,
 			Output: filepath.Join(jobDir, *stage, "output")}
 		progress, progressErr := readProgress(name)
 		if progressErr != nil {
@@ -418,27 +431,73 @@ func containerArgs(name, id, stage, kind, hostJobDir string, t jobconfig.TaskTyp
 	return args, nil
 }
 
-func startContainer(name, id, stage, kind, hostJobDir string, t jobconfig.TaskType, commandArgs []string, environment map[string]string, debug bool) error {
+func startContainer(name, id, stage, kind, jobDir, hostJobDir string, t jobconfig.TaskType, commandArgs []string, environment map[string]string, debug bool) (jobconfig.StartResult, error) {
 	args, err := containerArgs(name, id, stage, kind, hostJobDir, t, commandArgs, environment)
 	if err != nil {
-		return err
+		return jobconfig.StartResult{}, err
+	}
+	startArgs := []string{"start", name}
+	result := jobconfig.StartResult{
+		JobID:         id,
+		Stage:         stage,
+		ContainerName: name,
 	}
 	if debug {
 		debugDockerCommand(os.Stderr, args)
+		result.DockerCommands = []string{
+			formatDockerCommand(args),
+			formatDockerCommand(startArgs),
+		}
 	}
 	idOut, err := dockerWithEnv(context.Background(), environment, args...)
 	if err != nil {
-		return err
+		return jobconfig.StartResult{}, err
 	}
-	startArgs := []string{"start", name}
+	result.ContainerID = strings.TrimSpace(idOut)
+	if err := writeStartRecord(filepath.Join(jobDir, stage), result); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot save start record: %v\n", err)
+	}
 	if debug {
 		debugDockerCommand(os.Stderr, startArgs)
 	}
 	if _, err := docker(context.Background(), startArgs...); err != nil {
-		return fmt.Errorf("container %s created (%s) but could not start: %w", name, strings.TrimSpace(idOut), err)
+		return jobconfig.StartResult{}, fmt.Errorf("container %s created (%s) but could not start: %w", name, result.ContainerID, err)
 	}
-	fmt.Printf("job_id=%s stage=%s container_id=%s\n", id, stage, strings.TrimSpace(idOut))
-	return nil
+	result.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := writeStartRecord(filepath.Join(jobDir, stage), result); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot update start record: %v\n", err)
+	}
+	return result, nil
+}
+
+func writeStartRecord(stageDir string, result jobconfig.StartResult) error {
+	contents, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return err
+	}
+	contents = append(contents, '\n')
+	file, err := os.CreateTemp(stageDir, ".start-*.json")
+	if err != nil {
+		return err
+	}
+	temporaryName := file.Name()
+	defer os.Remove(temporaryName)
+	if err := file.Chmod(0600); err != nil {
+		file.Close()
+		return err
+	}
+	if _, err := file.Write(contents); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryName, filepath.Join(stageDir, "start.json"))
 }
 
 const debugRedacted = "<redacted>"

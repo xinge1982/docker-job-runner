@@ -50,9 +50,12 @@ type Status struct {
 	JobID         string         `json:"job_id"`
 	Stage         string         `json:"stage"`
 	ContainerID   string         `json:"container_id"`
+	ContainerName string         `json:"container_name"`
 	State         ContainerState `json:"container_state"`
 	Output        string         `json:"output"`
 }
+
+type StartResult = jobconfig.StartResult
 
 // CompletedJob reports retained stage containers for an instance whose
 // existing stages have all finished. A nonzero exit code is still completed.
@@ -123,19 +126,22 @@ func (c Client) StartApplyRequest(ctx context.Context, id, taskType string, requ
 	return c.startRequest(ctx, id, taskType, "apply", request)
 }
 
+func (c Client) StartRunRequestDetailed(ctx context.Context, id, taskType string, request jobconfig.StartRequest) (StartResult, error) {
+	return c.startRequestDetailed(ctx, id, taskType, "run", request)
+}
+
+func (c Client) StartPreviewRequestDetailed(ctx context.Context, id, taskType string, request jobconfig.StartRequest) (StartResult, error) {
+	return c.startRequestDetailed(ctx, id, taskType, "preview", request)
+}
+
+func (c Client) StartApplyRequestDetailed(ctx context.Context, id, taskType string, request jobconfig.StartRequest) (StartResult, error) {
+	return c.startRequestDetailed(ctx, id, taskType, "apply", request)
+}
+
 func (c Client) startRequest(ctx context.Context, id, taskType, stage string, request jobconfig.StartRequest) (string, error) {
-	if err := checkIDStage(id, stage); err != nil {
-		return "", err
-	}
-	if !json.Valid(request.Input) || len(request.Input) > 32<<20 {
-		return "", errors.New("input must be valid JSON and at most 32 MiB")
-	}
-	b, err := json.Marshal(request)
+	b, err := encodeStartRequest(id, stage, request)
 	if err != nil {
 		return "", err
-	}
-	if len(b) > 32<<20 {
-		return "", errors.New("start request exceeds 32 MiB")
 	}
 	out, err := c.callWithInput(ctx, b, "start", "--id", id, "--type", taskType,
 		"--stage", stage, "--request", "-")
@@ -143,6 +149,43 @@ func (c Client) startRequest(ctx context.Context, id, taskType, stage string, re
 		return "", err
 	}
 	return parseContainerID(out)
+}
+
+func (c Client) startRequestDetailed(ctx context.Context, id, taskType, stage string, request jobconfig.StartRequest) (StartResult, error) {
+	b, err := encodeStartRequest(id, stage, request)
+	if err != nil {
+		return StartResult{}, err
+	}
+	out, err := c.callWithInput(ctx, b, "start", "--id", id, "--type", taskType,
+		"--stage", stage, "--request", "-", "--response-format", "json")
+	if err != nil {
+		return StartResult{}, err
+	}
+	var result StartResult
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		return StartResult{}, fmt.Errorf("decode start response: %w", err)
+	}
+	if result.JobID != id || result.Stage != stage || result.ContainerID == "" || result.ContainerName != "job-"+id+"-"+stage {
+		return StartResult{}, errors.New("start response does not match request")
+	}
+	return result, nil
+}
+
+func encodeStartRequest(id, stage string, request jobconfig.StartRequest) ([]byte, error) {
+	if err := checkIDStage(id, stage); err != nil {
+		return nil, err
+	}
+	if !json.Valid(request.Input) || len(request.Input) > 32<<20 {
+		return nil, errors.New("input must be valid JSON and at most 32 MiB")
+	}
+	b, err := json.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > 32<<20 {
+		return nil, errors.New("start request exceeds 32 MiB")
+	}
+	return b, nil
 }
 
 func (c Client) start(ctx context.Context, id, taskType, stage string, input json.RawMessage, params map[string]string) (string, error) {

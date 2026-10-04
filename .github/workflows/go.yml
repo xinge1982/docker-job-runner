@@ -13,4 +13,4 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test ./...
-      - run: test -z "$(gofmt -l cmd/jobrunner/main.go cmd/jobrunner/files.go cmd/jobrunner/files_test.go cmd/jobrunner/lifecycle.go cmd/jobrunner/lifecycle_test.go jobrunnerclient/client.go jobconfig/config.go jobconfig/config_test.go)"
+      - run: test -z "$(gofmt -l cmd/jobrunner/main.go cmd/jobrunner/main_test.go cmd/jobrunner/files.go cmd/jobrunner/files_test.go cmd/jobrunner/lifecycle.go cmd/jobrunner/lifecycle_test.go jobrunnerclient/client.go jobrunnerclient/start_test.go jobconfig/config.go jobconfig/config_test.go)"
