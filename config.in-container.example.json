@@ -1,6 +1,7 @@
 {
   "work_root": "/jobrunner/jobs",
   "host_work_root": "${HOST_JOBRUNNER_ROOT}/jobs",
+  "debug": false,
   "tasks": {
     "feature_road_id": {
       "image": "alpine:3.14",

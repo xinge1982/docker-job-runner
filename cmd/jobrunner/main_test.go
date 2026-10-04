@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -20,5 +21,57 @@ func TestContainerArgsDoNotContainEnvironmentValues(t *testing.T) {
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "private-secret") || !strings.Contains(joined, "--env POSTGRES_PASSWORD") {
 		t.Fatalf("unexpected environment argument: %s", joined)
+	}
+}
+
+func TestFormatDockerCommandRedactsEnvironmentValues(t *testing.T) {
+	args := []string{
+		"create",
+		"--env", "POSTGRES_PASSWORD=private-secret",
+		"--env", "ACCESS_TOKEN",
+		"--env=INLINE_TOKEN=inline-secret",
+		"-e", "SHORT_TOKEN=short-secret",
+		"-eJOINED_TOKEN=joined-secret",
+		"--env-file", "/secret/job.env",
+		"--env-file=/secret/second.env",
+		"alpine:3.14",
+		"sh", "-c", "echo hello",
+	}
+	original := append([]string(nil), args...)
+	command := formatDockerCommand(args)
+
+	for _, secret := range []string{
+		"private-secret",
+		"inline-secret",
+		"short-secret",
+		"joined-secret",
+		"/secret/job.env",
+		"/secret/second.env",
+	} {
+		if strings.Contains(command, secret) {
+			t.Fatalf("debug command exposed %q: %s", secret, command)
+		}
+	}
+	for _, name := range []string{
+		"POSTGRES_PASSWORD",
+		"ACCESS_TOKEN",
+		"INLINE_TOKEN",
+		"SHORT_TOKEN",
+		"JOINED_TOKEN",
+	} {
+		if !strings.Contains(command, name+"=<redacted>") {
+			t.Fatalf("debug command omitted redacted variable %q: %s", name, command)
+		}
+	}
+	if strings.Join(args, "\x00") != strings.Join(original, "\x00") {
+		t.Fatalf("formatting mutated source arguments: %#v", args)
+	}
+}
+
+func TestDebugDockerCommandWritesToProvidedWriter(t *testing.T) {
+	var output bytes.Buffer
+	debugDockerCommand(&output, []string{"start", "job-test-run"})
+	if got, want := output.String(), "debug: docker command: docker start job-test-run\n"; got != want {
+		t.Fatalf("got %q; want %q", got, want)
 	}
 }

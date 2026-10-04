@@ -228,7 +228,7 @@ func run(args []string) error {
 		} else if err := copyJSONExclusive(*input, inputDst); err != nil {
 			return err
 		}
-		return startContainer(name, *id, *stage, *taskType, hostJobDir, t, commandArgs, req.Environment)
+		return startContainer(name, *id, *stage, *taskType, hostJobDir, t, commandArgs, req.Environment, cfg.Debug)
 	case "status":
 		state, err := inspect(name)
 		if err != nil {
@@ -418,20 +418,91 @@ func containerArgs(name, id, stage, kind, hostJobDir string, t jobconfig.TaskTyp
 	return args, nil
 }
 
-func startContainer(name, id, stage, kind, hostJobDir string, t jobconfig.TaskType, commandArgs []string, environment map[string]string) error {
+func startContainer(name, id, stage, kind, hostJobDir string, t jobconfig.TaskType, commandArgs []string, environment map[string]string, debug bool) error {
 	args, err := containerArgs(name, id, stage, kind, hostJobDir, t, commandArgs, environment)
 	if err != nil {
 		return err
+	}
+	if debug {
+		debugDockerCommand(os.Stderr, args)
 	}
 	idOut, err := dockerWithEnv(context.Background(), environment, args...)
 	if err != nil {
 		return err
 	}
-	if _, err := docker(context.Background(), "start", name); err != nil {
+	startArgs := []string{"start", name}
+	if debug {
+		debugDockerCommand(os.Stderr, startArgs)
+	}
+	if _, err := docker(context.Background(), startArgs...); err != nil {
 		return fmt.Errorf("container %s created (%s) but could not start: %w", name, strings.TrimSpace(idOut), err)
 	}
 	fmt.Printf("job_id=%s stage=%s container_id=%s\n", id, stage, strings.TrimSpace(idOut))
 	return nil
+}
+
+const debugRedacted = "<redacted>"
+
+var debugSafeArgument = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)
+
+// debugDockerCommand writes a shell-like diagnostic command without exposing
+// values supplied through Docker environment options.
+func debugDockerCommand(w io.Writer, args []string) {
+	fmt.Fprintf(w, "debug: docker command: %s\n", formatDockerCommand(args))
+}
+
+func formatDockerCommand(args []string) string {
+	redacted := redactDockerEnvironmentArguments(args)
+	parts := make([]string, 0, len(redacted)+1)
+	parts = append(parts, "docker")
+	for _, arg := range redacted {
+		parts = append(parts, quoteDebugArgument(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func redactDockerEnvironmentArguments(args []string) []string {
+	redacted := append([]string(nil), args...)
+	for index := 0; index < len(redacted); index++ {
+		argument := redacted[index]
+		switch {
+		case argument == "--env" || argument == "-e":
+			if index+1 < len(redacted) {
+				redacted[index+1] = redactEnvironmentAssignment(redacted[index+1])
+				index++
+			}
+		case strings.HasPrefix(argument, "--env="):
+			redacted[index] = "--env=" + redactEnvironmentAssignment(strings.TrimPrefix(argument, "--env="))
+		case strings.HasPrefix(argument, "-e") && len(argument) > len("-e"):
+			redacted[index] = "-e" + redactEnvironmentAssignment(strings.TrimPrefix(argument, "-e"))
+		case argument == "--env-file":
+			if index+1 < len(redacted) {
+				redacted[index+1] = debugRedacted
+				index++
+			}
+		case strings.HasPrefix(argument, "--env-file="):
+			redacted[index] = "--env-file=" + debugRedacted
+		}
+	}
+	return redacted
+}
+
+func redactEnvironmentAssignment(value string) string {
+	name, _, hasValue := strings.Cut(value, "=")
+	if !validEnvName.MatchString(name) {
+		return debugRedacted
+	}
+	if hasValue || name != "" {
+		return name + "=" + debugRedacted
+	}
+	return debugRedacted
+}
+
+func quoteDebugArgument(value string) string {
+	if value != "" && debugSafeArgument.MatchString(value) {
+		return value
+	}
+	return strconv.Quote(value)
 }
 
 func inspect(name string) (ContainerState, error) {

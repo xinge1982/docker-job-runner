@@ -17,6 +17,7 @@ import (
 type Config struct {
 	WorkRoot     string              `json:"work_root"`
 	HostWorkRoot string              `json:"host_work_root,omitempty"`
+	Debug        bool                `json:"debug,omitempty"`
 	Tasks        map[string]TaskType `json:"tasks"`
 }
 
@@ -153,6 +154,9 @@ func Load(filename string) (Config, error) {
 	}
 	override("work_root", &c.WorkRoot)
 	override("host_work_root", &c.HostWorkRoot)
+	if v.IsSet("debug") {
+		c.Debug = v.GetBool("debug")
+	}
 	hostRoot, err := expandConfigEnv(c.HostWorkRoot)
 	if err != nil {
 		return Config{}, err

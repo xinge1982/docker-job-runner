@@ -151,6 +151,7 @@ between nested names; task names in variable names are uppercase. For example:
 ```bash
 export JOBRUNNER_WORK_ROOT=/srv/jobrunner/jobs
 export JOBRUNNER_HOST_WORK_ROOT=/srv/jobrunner/jobs
+export JOBRUNNER_DEBUG=true
 export JOBRUNNER_TASKS__TILESET_BUILD__NETWORK=sign_default
 ```
 
@@ -162,6 +163,14 @@ the runner process environment. An unset placeholder stops config loading.
 The command, mount targets, and declared job parameters remain fixed in JSON.
 Job connection details and credentials belong in each start request's
 `environment` values; `JOBRUNNER_` variables configure the runner itself.
+
+Set top-level `"debug": true` or `JOBRUNNER_DEBUG=true` to print the Docker
+`create` and `start` command lines to standard error before a job container is
+started. Values passed with `--env` / `-e` are replaced with `<redacted>`, and
+`--env-file` paths are also hidden. Variable names remain visible so the
+effective command can be diagnosed. The redaction is limited to Docker
+environment options: do not put credentials in task command arguments,
+container names, image names, labels, mount paths, or other Docker options.
 
 
 `config.example.json` runs on the host. `config.in-container.example.json`

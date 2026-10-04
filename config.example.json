@@ -1,5 +1,6 @@
 {
   "work_root": "./jobs",
+  "debug": false,
   "tasks": {
     "tileset_build": {
       "image": "alpine:3.14",
