@@ -2,7 +2,10 @@ module github.com/xinge1982/docker-job-runner
 
 go 1.21
 
-require github.com/spf13/viper v1.18.2
+require (
+	github.com/spf13/viper v1.18.2
+	golang.org/x/sys v0.15.0
+)
 
 require (
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
@@ -20,7 +23,6 @@ require (
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.9.0 // indirect
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
-	golang.org/x/sys v0.15.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
