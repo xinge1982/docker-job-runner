@@ -52,3 +52,24 @@ printf '%s\n' '{"job_id":"job01","stage":"run","container_id":"container-id","co
 		t.Fatalf("unexpected detailed start result: %#v", result)
 	}
 }
+
+func TestListTaskTypes(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "fake-jobrunner")
+	script := `#!/bin/sh
+printf '%s\n' '["feature_road_id","tileset_build"]'
+`
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	client := Client{
+		Binary: binary,
+		Config: "config.json",
+	}
+	names, err := client.ListTaskTypes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 2 || names[0] != "feature_road_id" || names[1] != "tileset_build" {
+		t.Fatalf("unexpected task type list: %#v", names)
+	}
+}

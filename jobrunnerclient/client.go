@@ -114,6 +114,28 @@ func (c Client) DescribeTask(ctx context.Context, taskType string) (jobconfig.Ta
 	return task, nil
 }
 
+// ListTaskTypes returns the sorted task names configured in the runner.
+// It intentionally exposes no image, mount, command, or environment details.
+func (c Client) ListTaskTypes(ctx context.Context) ([]string, error) {
+	out, err := c.call(ctx, "list-types")
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	if err := json.Unmarshal([]byte(out), &names); err != nil {
+		return nil, fmt.Errorf("decode task type list: %w", err)
+	}
+	if names == nil {
+		names = []string{}
+	}
+	for index, name := range names {
+		if name == "" || (index > 0 && names[index-1] >= name) {
+			return nil, errors.New("jobrunner task type list is invalid or unsorted")
+		}
+	}
+	return names, nil
+}
+
 func (c Client) StartRunRequest(ctx context.Context, id, taskType string, request jobconfig.StartRequest) (string, error) {
 	return c.startRequest(ctx, id, taskType, "run", request)
 }

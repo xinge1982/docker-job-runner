@@ -53,7 +53,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: jobrunner <start|describe|status|result|logs|wait|stop|upload|archive|list-completed|delete> [flags]")
+		return errors.New("usage: jobrunner <start|describe|list-types|status|result|logs|wait|stop|upload|archive|list-completed|delete> [flags]")
 	}
 	cmd := args[0]
 	f := flag.NewFlagSet(cmd, flag.ContinueOnError)
@@ -73,10 +73,10 @@ func run(args []string) error {
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
-	if cmd != "describe" && cmd != "list-completed" && !validID.MatchString(*id) {
+	if cmd != "describe" && cmd != "list-types" && cmd != "list-completed" && !validID.MatchString(*id) {
 		return errors.New("id must contain 1-64 letters, digits, underscores or hyphens")
 	}
-	if cmd != "describe" && cmd != "upload" && cmd != "archive" && cmd != "list-completed" && cmd != "delete" && *stage != "preview" && *stage != "apply" && *stage != "run" {
+	if cmd != "describe" && cmd != "list-types" && cmd != "upload" && cmd != "archive" && cmd != "list-completed" && cmd != "delete" && *stage != "preview" && *stage != "apply" && *stage != "run" {
 		return errors.New("stage must be preview, apply, or run")
 	}
 	if *tail < 0 || *tail > 10000 {
@@ -99,6 +99,14 @@ func run(args []string) error {
 			return err
 		}
 		return json.NewEncoder(os.Stdout).Encode(task)
+	}
+	if cmd == "list-types" {
+		names := make([]string, 0, len(cfg.Tasks))
+		for name := range cfg.Tasks {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return json.NewEncoder(os.Stdout).Encode(names)
 	}
 	if cfg.WorkRoot == "" {
 		return errors.New("work_root is required")

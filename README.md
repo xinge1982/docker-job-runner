@@ -234,6 +234,14 @@ the discovered task object. From the main program, call
 `runner.DescribeTask(ctx, "tileset_build")`, inspect `Parameters` and
 `EnvironmentVariables`, then submit `jobconfig.StartRequest`. The request
 JSON travels over stdin, including when the client connects over SSH.
+
+Use `jobrunner list-types --config config.json` to retrieve a sorted JSON array
+containing the configured task names. From the main program, call
+`runner.ListTaskTypes(ctx)`. This operation intentionally returns names only;
+it does not expose images, commands, mounts, fixed environment settings, or
+credentials. After the user selects a name, call `DescribeTask` to retrieve
+the public runtime schema for that task.
+
 If the main program has a local copy of the task catalog, it can instead use
 `jobconfig.Load(path)` and `config.Task(name)` for fixed fields only.
 `DescribeTask` reads the active remote program's parameter declarations;
